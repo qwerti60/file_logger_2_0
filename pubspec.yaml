@@ -1,0 +1,77 @@
+name: file_logger20
+description: "A new Flutter project."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.7.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  url_launcher: ^6.3.1
+  cupertino_icons: ^1.0.8
+  http: ^1.3.0
+  shared_preferences: ^2.5.3
+  flutter_svg: ^2.0.17
+  sqflite: ^2.4.2
+  flutter_bloc: ^9.1.0
+  ftpconnect: ^2.0.7
+  file_picker: ^10.0.0
+  path: ^1.8.0
+  http_parser: ^4.0.0
+  mime: ^2.0.0
+  path_provider: ^2.1.5
+  dio: ^5.8.0+1
+  connectivity_plus: ^6.1.3
+  icons_plus: ^5.0.0
+  permission_handler: ^12.0.0+1
+  workmanager:
+       git:
+         url: https://github.com/fluttercommunity/flutter_workmanager.git
+         path: workmanager
+         ref: main
+  open_file: ^3.5.10
+  csv: ^6.0.0
+
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_launcher_icons: ^0.14.3
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+   - assets/images/
+android:
+  app:
+    icons:
+      adaptive_icon_background: 'assets/images/icon.png'
+      adaptive_icon_foreground: 'assets/images/icon.png'
+
+flutter_launcher_icons:
+  android: "launcher_icon" # имя иконки для Android
+  ios: true # для iOS
+  image_path: "assets/icon/icon.png" # путь к вашей иконке
+  min_sdk_android: 21 # минимальная версия Android SDK
+  
+  # Дополнительные настройки (опционально):
+  adaptive_icon_background: "#ffffff" # цвет фона для адаптивных иконок Android
+  adaptive_icon_foreground: "assets/icon/icon_foreground.png" # передний план для адаптивных иконок
+  remove_alpha_ios: true # удалить прозрачность для iOS
+  web:
+    generate: true
+    image_path: "assets/icon/icon.png"
+  windows:
+    generate: true
+    image_path: "assets/icon/icon.png"
+  macos:
+    generate: true
+    image_path: "assets/icon/icon.png"      
