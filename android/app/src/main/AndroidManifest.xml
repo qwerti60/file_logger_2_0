@@ -5,7 +5,8 @@ package="com.example.file_logger20">
         android:label="file_logger20"
         android:name="${applicationName}"
         android:icon="@mipmap/launcher_icon"
-        android:requestLegacyExternalStorage="true">
+        android:requestLegacyExternalStorage="true"
+        android:networkSecurityConfig="@xml/network_security_config">
         <activity
             android:name="com.example.file_logger20.MainActivity"
             android:exported="true"

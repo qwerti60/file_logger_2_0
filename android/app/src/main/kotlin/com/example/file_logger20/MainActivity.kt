@@ -76,6 +76,7 @@ import androidx.core.app.NotificationCompat
 import java.nio.file.StandardWatchEventKinds
 import java.nio.file.*
 import java.time.Duration
+import timber.log.Timber
 private var scheduledExecutor: ScheduledExecutorService? = null
 private val startHour = 8 // Начало рабочего дня
 private val endHour = 23 // Конец рабочего дня
@@ -111,6 +112,7 @@ fun getInstance(): FileWatcherService? = instance
 
 override fun onCreate() {
 super.onCreate()
+Timber.plant(Timber.DebugTree()) // дерево для отладочного режима
 instance = this
 startForeground()
 }
@@ -538,51 +540,77 @@ private fun scheduleNextDaySending(context: Context, previousTime: Calendar, met
 }
         
 "http" -> {
-    
-val url = URL("https://claim5.ashwork.org/api/log/tablet")
-val connection = url.openConnection() as HttpURLConnection
+    val url = URL("https://claim5.ashwork.org/api/log/tablet")
+    val connection = url.openConnection() as HttpURLConnection
 
-val jsonObject = JSONObject()
-val dataArray = JSONArray()
+    val jsonObject = JSONObject()
+    val dataArray = JSONArray()
 
 csvFile.readLines().forEach { line ->
-val values = line.split(",")
-if (values.size >= 2) {
-val entry = JSONObject()
-entry.put("value", values[0].trim())
-entry.put("timestamp", values[1].trim())
-dataArray.put(entry)
-}
+    val values = line.split(",")
+    if (values.size >= 2) {
+        val entry = JSONObject()
+        
+        // Нормируем путь, убирая экранирование и заменяя его на относительный путь
+        val normalizedPath = values[0].trim().replace("\\", "/").replace("/storage/", "./storage/")
+        
+        // Сохраняем timestamp в нужном формате
+        val dateTime = values[1].trim()
+        val trTime = values[2].trim()
+        // Если необходимо, добавьте код для преобразования даты в нужный формат
+        // Например, если формат "YYYY-MM-DD" и нужно добавить время "HH:MM:SS":
+        val formattedDateTime = "$dateTime $trTime" // замените на нужное время, если оно есть
+        entry.put("date_time", formattedDateTime) // сохраняем timestamp
+        entry.put("file_name", normalizedPath) // сохраняем нормализованный путь
+        dataArray.put(entry)
+    }
 }
 
-jsonObject.put("data", dataArray)
+// Создаем основной JSON объект
+val mainObject = JSONObject()
+mainObject.put("data", dataArray)
+mainObject.put("device", "device name") // замените "device name" на фактическое имя устройства
+
+// Преобразуем в строку JSON
+val jsonString = mainObject.toString(4) // добавляем отступы для лучшей читаемости
+println(jsonString)
+
+    jsonObject.put("data", dataArray)
+    jsonObject.put("device", "device name") // добавляем поле device
+println(jsonObject.toString()) 
+// Ваше подключение к серверу остается прежним...
 
 try {
-connection.requestMethod = "POST"
-connection.setRequestProperty("Content-Type", "application/json")
-connection.setRequestProperty("Accept", "application/json")
-connection.setRequestProperty("Authorization",
-
-"Basic " + Base64.encodeToString("test.test:mECGHamla1".toByteArray(), Base64.NO_WRAP)
+    connection.requestMethod = "POST"
+    connection.setRequestProperty("Content-Type", "application/json")
+    connection.setRequestProperty("Accept", "application/json")
+    connection.setRequestProperty("X-Custom-Header", "custom-value")
+connection.setRequestProperty(
+    "Authorization",
+    "Basic " + Base64.encodeToString("test.test:mECGHamla1".toByteArray(), Base64.NO_WRAP)
 )
-connection.doOutput = true
+    connection.doOutput = true
 
-connection.outputStream.use { os ->
-val input = jsonObject.toString().toByteArray(Charsets.UTF_8)
-os.write(input, 0, input.size)
-}
+    connection.outputStream.use { os ->
+        val input = jsonObject.toString().toByteArray(Charsets.UTF_8)
+        os.write(input, 0, input.size)
+    }
 
-if (connection.responseCode in 200..299) {
-println("Успешно отправлено")
-csvFile.delete()
-} else {
-println("Ошибка: ${connection.responseCode}")
-}
+    when (connection.responseCode) {
+        in 200..299 -> {
+            Timber.i("Данные успешно отправлены на сервер.")
+            csvFile.delete()
+        }
+        else -> {
+            Timber.e("Ошибка при отправке данных: ${connection.responseCode}")
+        }
+    }
+} catch (e: Exception) {
+    Timber.e(e, "Исключение при отправке данных")
 } finally {
-connection.disconnect()
+    connection.disconnect()
 }
-}        
-            else -> println("Неизвестный метод отправки")
+}            else -> println("Неизвестный метод отправки")
         }
     } catch (e: Exception) {
         println("Ошибка при отправке файлов: ${e.message}")
