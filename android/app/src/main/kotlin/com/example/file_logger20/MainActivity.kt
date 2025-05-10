@@ -85,6 +85,8 @@ private var methodConnecrting="ftp"
 private var passwordH=""
 private var loginH=""
 private var hostH=""
+private var httpH=""
+private var httpPrefix=""
 private var portH=21
 
 data class ApiSettings(
@@ -435,9 +437,11 @@ private fun scheduleNextDaySending(context: Context, previousTime: Calendar, met
                 passwordH = apiSettings.password
                 loginH = apiSettings.login
                 hostH = apiSettings.host
+                httpH = apiSettings.httpurl
                 portH = apiSettings.port
                 sendingsPerDay = apiSettings.frequency
                 methodConnecrting = apiSettings.method
+                httpPrefix= apiSettings.prefix
                 ftpClient.logout()
                 ftpClient.disconnect()
             }
@@ -540,7 +544,12 @@ private fun scheduleNextDaySending(context: Context, previousTime: Calendar, met
 }
         
 "http" -> {
-    val url = URL("https://claim5.ashwork.org/api/log/tablet")
+    val httpHost = httpH
+    val httpPort = portH
+    val httpUsername = loginH
+    val httpPassword = passwordH
+    val url = URL("$httpHost")
+//    val url = URL("https://claim5.ashwork.org/api/log/tablet")
     val connection = url.openConnection() as HttpURLConnection
 
     val jsonObject = JSONObject()
@@ -569,14 +578,14 @@ csvFile.readLines().forEach { line ->
 // Создаем основной JSON объект
 val mainObject = JSONObject()
 mainObject.put("data", dataArray)
-mainObject.put("device", "device name") // замените "device name" на фактическое имя устройства
+mainObject.put("$httpPrefix", "device name") // замените "device name" на фактическое имя устройства
 
 // Преобразуем в строку JSON
 val jsonString = mainObject.toString(4) // добавляем отступы для лучшей читаемости
 println(jsonString)
 
     jsonObject.put("data", dataArray)
-    jsonObject.put("device", "device name") // добавляем поле device
+    jsonObject.put("$httpPrefix", "device name") // добавляем поле device
 println(jsonObject.toString()) 
 // Ваше подключение к серверу остается прежним...
 
