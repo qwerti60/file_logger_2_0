@@ -25,6 +25,7 @@ class _LogsPageState extends State<LogsPage> {
   @override
   void initState() {
     super.initState();
+    _loadLogs();
     _printLogsInfo(); // вывод информации о журналах
   }
 
@@ -59,7 +60,6 @@ class _LogsPageState extends State<LogsPage> {
     print('=====================');
   }
 
-  /// Метод загрузки логов
   Future _loadLogs() async {
     print('Starting to load logs...');
     setState(() {
@@ -80,22 +80,47 @@ class _LogsPageState extends State<LogsPage> {
       }
 
       print('Processing log files...');
-      await for (final file in logsDir.list()) {
-        if (file.path.endsWith('.csv')) {
-          print('Reading file: ${file.path}');
-          final contents = await File(file.path).readAsString();
-          print('File contents length: ${contents.length}');
 
-          final rowsAsListOfValues = const CsvToListConverter().convert(
-            contents,
-          ); // Парсим содержимое
-          print('Parsed ${rowsAsListOfValues.length} rows from CSV');
+      // Получаем список всех CSV файлов
+      final files =
+          await logsDir
+              .list()
+              .where((entity) => entity.path.endsWith('.csv'))
+              .toList();
 
-          setState(() {
-            _logData.addAll(rowsAsListOfValues);
-          });
+      // Сортируем файлы по времени изменения (самые новые первые)
+      files.sort((a, b) {
+        return File(
+          b.path,
+        ).lastModifiedSync().compareTo(File(a.path).lastModifiedSync());
+      });
+
+      // Обрабатываем каждый файл
+      for (final file in files) {
+        print('Reading file: ${file.path}');
+        final lines = await File(file.path).readAsLines();
+
+        // Пропускаем заголовок если он есть
+        if (lines.isNotEmpty) {
+          lines.removeAt(0);
+        }
+
+        // Переворачиваем строки
+        final reversedLines = lines.reversed;
+
+        // Парсим каждую строку
+        for (final line in reversedLines) {
+          if (line.trim().isEmpty) continue;
+
+          final values = line.split(',').map((e) => e.trim()).toList();
+          if (values.isNotEmpty) {
+            setState(() {
+              _logData.add(values);
+            });
+          }
         }
       }
+
       print('Finished loading logs. Total entries: ${_logData.length}');
     } catch (e) {
       print('Error loading logs: $e');
@@ -194,6 +219,7 @@ class _LogsPageState extends State<LogsPage> {
                         : _logData.isEmpty
                         ? Center(child: Text('Нет доступных логов'))
                         : ListView.builder(
+                          //                       reverse: true, // Добавьте этот параметр
                           itemCount: _logData.length,
                           itemBuilder: (context, index) {
                             final logItem = _logData[index];

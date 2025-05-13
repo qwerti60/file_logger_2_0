@@ -25,10 +25,45 @@ class _SettingPageState extends State<SettingPage> {
   Future<void> _sendFiles() async {
     try {
       // Вызываем нативный метод sendFiles
-      await platform.invokeMethod('sendFiles');
-      print('Запрос на отправку файлов выполнен успешно');
+      final result = await platform.invokeMethod('sendFiles');
+
+      // Показываем успешное сообщение
+      await showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Успех'),
+            content: Text('Файлы успешно отправлены'),
+            actions: <Widget>[
+              TextButton(
+                child: Text('OK'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          );
+        },
+      );
     } on PlatformException catch (e) {
-      print('Ошибка при вызове нативного метода: ${e.message}');
+      // Показываем сообщение об ошибке
+      await showDialog(
+        context: context,
+        builder: (BuildContext context) {
+          return AlertDialog(
+            title: Text('Ошибка'),
+            content: Text('Ошибка при отправке файлов: ${e.message}'),
+            actions: <Widget>[
+              TextButton(
+                child: Text('OK'),
+                onPressed: () {
+                  Navigator.of(context).pop();
+                },
+              ),
+            ],
+          );
+        },
+      );
     }
   }
 

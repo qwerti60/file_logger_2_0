@@ -668,16 +668,42 @@ class MainActivity : FlutterActivity() {
                     "isTrackingEnabled" -> {
                         result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
                     }
-                    "sendFiles" -> {
-                        try {
-                            CoroutineScope(Dispatchers.IO).launch {
-                                FileWatcherService.getInstance()?.sendFiles(applicationContext, "ftp")
-                            }
-                            result.success(null)
-                        } catch (e: Exception) {
-                            result.error("ERROR", "Ошибка при отправке файлов", e.message)
-                        }
-                    }
+"sendFiles" -> {
+try {
+CoroutineScope(Dispatchers.IO).launch {
+try {
+val response = FileWatcherService.getInstance()?.sendFiles(applicationContext, "ftp")
+
+withContext(Dispatchers.Main) {
+if (response == null) {
+result.error(
+"SERVICE_UNAVAILABLE",
+"Сервис недоступен",
+null
+)
+} else {
+// Предполагая, что response это какой-то объект с данными
+result.success("Файлы успешно отправлены")
+}
+}
+} catch (e: Exception) {
+withContext(Dispatchers.Main) {
+result.error(
+"SEND_ERROR",
+"Ошибка при отправке файлов",
+e.message
+)
+}
+}
+}
+} catch (e: Exception) {
+result.error(
+"INIT_ERROR",
+"Ошибка при инициализации отправки файлов",
+e.message
+)
+}
+}
                 }
             }
 

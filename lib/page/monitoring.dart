@@ -12,6 +12,9 @@ import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p; // Библиотека для работы с путями файлов
 import 'package:file/local.dart'; // Для работы с файловой системой
+import 'package:file_picker/file_picker.dart';
+import 'package:dio/dio.dart'; // Или другой HTTP клиент
+import 'dart:io';
 
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) {
@@ -99,30 +102,57 @@ class _MonitoringPageState extends State<MonitoringPage> {
 
   List<String> directories = [];
   // Модифицируем _pickDirectory метод
-  Future<void> _pickDirectory() async {
-    String? selectedDirectory = await FilePicker.platform.getDirectoryPath();
+  //List<String> directories = [];
 
-    if (selectedDirectory != null && !directories.contains(selectedDirectory)) {
+  Future<void> _pickDirectory() async {
+    final result = await FilePicker.platform.getDirectoryPath();
+
+    if (result != null && !directories.contains(result)) {
       setState(() {
-        directories.add(selectedDirectory);
+        directories.add(result);
       });
 
-      // URI вашего PHP API скрипта
-      var uri = Uri.parse('http://ivnovav.ru/logger_api/add_directory.php');
+      try {
+        final subDirectories = await _listAllSubdirectories(result);
+        for (var dir in subDirectories) {
+          setState(() {
+            directories.add(dir);
+          });
+        }
 
-      // Отправляем POST запрос
-      var response = await http.post(
-        uri,
-        body: {'directoryPath': selectedDirectory},
-      );
+        // Теперь отправьте полный список путей серверу
+        final response = await Dio().post(
+          'http://ivnovav.ru/logger_api/add_directory.php',
+          data: {'directories': directories},
+        );
 
-      // Обрабатываем ответ
-      if (response.statusCode == 200) {
-        print("Директория успешно добавлена: $selectedDirectory");
-      } else {
-        print("Ошибка при добавлении директории.");
+        if (response.statusCode == 200) {
+          print("Все директории успешно добавлены!");
+          print(directories);
+        } else {
+          print("Ошибка при добавлении директорий.");
+        }
+      } catch (e) {
+        print(e.toString());
       }
     }
+  }
+
+  /// Рекурсивная функция для сбора всех подпапок
+  Future<List<String>> _listAllSubdirectories(String directoryPath) async {
+    final Directory dir = Directory(directoryPath);
+    final allPaths = <String>[directoryPath];
+
+    try {
+      final entries = await dir.list(recursive: true).toList();
+      for (final entry in entries) {
+        if (entry is Directory) {
+          allPaths.add(entry.path);
+        }
+      }
+    } on Exception catch (_) {}
+
+    return allPaths;
   }
 
   Future<void> fetchDirectories() async {
@@ -227,161 +257,165 @@ class _MonitoringPageState extends State<MonitoringPage> {
   }
 */
   @override
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('File logger 2.0')),
-      body: Column(
-        //mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            child: SingleChildScrollView(
-              child: Column(
-                children: List.generate(directories.length, (index) {
-                  return Column(
-                    children: [
-                      ListTile(title: Text(directories[index])),
-                      Divider(color: Colors.grey),
-                    ],
-                  );
-                }),
-              ),
-            ),
-          ),
-          Spacer(),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            margin: const EdgeInsets.only(top: 20.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: TextButton(
-                style: TextButton.styleFrom(
-                  fixedSize: const Size(double.infinity, 50),
-                  foregroundColor: Colors.black, // Черный текст
-                  backgroundColor: Colors.white, // Белый фон
-                  disabledForegroundColor:
-                      Colors
-                          .grey, // Используем уже объявленные цвета для демонстрации
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(3)),
-                    side: BorderSide(
-                      color: Colors.grey,
-                      width: 1,
-                    ), // Серый контур толщиной в 1
-                  ),
+      body: SafeArea(
+        // Добавляем SafeArea для предотвращения проблем с навигационной панелью
+        child: SingleChildScrollView(
+          // Прокручиваемый контейнер
+          child: Column(
+            mainAxisSize: MainAxisSize.min, // Минимизируем размер столбца
+            children: [
+              // Содержимое вашей страницы остается прежним
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                child: Column(
+                  children: List.generate(directories.length, (index) {
+                    return Column(
+                      children: [
+                        ListTile(title: Text(directories[index])),
+                        Divider(color: Colors.grey),
+                      ],
+                    );
+                  }),
                 ),
-                onPressed: _pickDirectory,
-                child: const Text('Добавить директорию'),
               ),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            margin: const EdgeInsets.only(top: 20.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: TextButton(
-                style: TextButton.styleFrom(
-                  fixedSize: const Size(double.infinity, 50),
-                  foregroundColor: Colors.black, // Черный текст
-                  backgroundColor: Colors.white, // Белый фон
-                  disabledForegroundColor:
-                      Colors
-                          .grey, // Используем уже объявленные цвета для демонстрации
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(3)),
-                    side: BorderSide(
-                      color: Colors.grey,
-                      width: 1,
-                    ), // Серый контур толщиной в 1
-                  ),
-                ),
-                onPressed: () async {
-                  bool confirmed =
-                      await showDialog<bool>(
-                        context: context,
-                        builder: (context) {
-                          return AlertDialog(
-                            title: Text("Подтверждение удаления"),
-                            content: Text(
-                              "Вы уверены, что хотите очистить все директории?",
-                            ),
-                            actions: [
-                              TextButton(
-                                child: Text("Отмена"),
-                                onPressed:
-                                    () => Navigator.of(context).pop(false),
-                              ),
-                              TextButton(
-                                child: Text("Удалить"),
-                                onPressed:
-                                    () => Navigator.of(context).pop(true),
-                              ),
-                            ],
-                          );
-                        },
-                      ) ??
-                      false;
 
-                  if (confirmed) {
-                    print("Пользователь подтвердил очистку");
-                    clearSelectedDirectories(directories);
-                  }
-                },
-                child: const Text('Очистить'),
+              //////////////              Spacer(), // Удалите этот спейсер, он вызывает смещение вниз
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                margin: const EdgeInsets.only(top: 20.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      fixedSize: const Size(double.infinity, 50),
+                      foregroundColor: Colors.black, // Черный текст
+                      backgroundColor: Colors.white, // Белый фон
+                      disabledForegroundColor:
+                          Colors
+                              .grey, // Используем уже объявленные цвета для демонстрации
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(3)),
+                        side: BorderSide(
+                          color: Colors.grey,
+                          width: 1,
+                        ), // Серый контур толщиной в 1
+                      ),
+                    ),
+                    onPressed: _pickDirectory,
+                    child: const Text('Добавить директорию'),
+                  ),
+                ),
               ),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            margin: const EdgeInsets.only(top: 20.0),
-            child: SizedBox(
-              width: double.infinity,
-              child: TextButton(
-                style: TextButton.styleFrom(
-                  fixedSize: const Size(double.infinity, 50),
-                  foregroundColor:
-                      _trackingEnabled
-                          ? Colors.white
-                          : Colors.black, // Цвет текста в зависимости от флага
-                  backgroundColor:
-                      _trackingEnabled
-                          ? Colors.red
-                          : Colors.white, // Цвет фона в зависимости от флага
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.all(Radius.circular(3)),
-                    side: BorderSide(
-                      color:
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                margin: const EdgeInsets.only(top: 20.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      fixedSize: const Size(double.infinity, 50),
+                      foregroundColor: Colors.black, // Черный текст
+                      backgroundColor: Colors.white, // Белый фон
+                      disabledForegroundColor:
+                          Colors
+                              .grey, // Используем уже объявленные цвета для демонстрации
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(3)),
+                        side: BorderSide(
+                          color: Colors.grey,
+                          width: 1,
+                        ), // Серый контур толщиной в 1
+                      ),
+                    ),
+                    onPressed: () async {
+                      bool confirmed =
+                          await showDialog<bool>(
+                            context: context,
+                            builder: (context) {
+                              return AlertDialog(
+                                title: Text("Подтверждение удаления"),
+                                content: Text(
+                                  "Вы уверены, что хотите очистить все директории?",
+                                ),
+                                actions: [
+                                  TextButton(
+                                    child: Text("Отмена"),
+                                    onPressed:
+                                        () => Navigator.of(context).pop(false),
+                                  ),
+                                  TextButton(
+                                    child: Text("Удалить"),
+                                    onPressed:
+                                        () => Navigator.of(context).pop(true),
+                                  ),
+                                ],
+                              );
+                            },
+                          ) ??
+                          false;
+
+                      if (confirmed) {
+                        print("Пользователь подтвердил очистку");
+                        clearSelectedDirectories(directories);
+                      }
+                    },
+                    child: const Text('Очистить'),
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                margin: const EdgeInsets.only(top: 20.0),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: TextButton(
+                    style: TextButton.styleFrom(
+                      fixedSize: const Size(double.infinity, 50),
+                      foregroundColor:
+                          _trackingEnabled
+                              ? Colors.white
+                              : Colors
+                                  .black, // Цвет текста в зависимости от флага
+                      backgroundColor:
                           _trackingEnabled
                               ? Colors.red
                               : Colors
-                                  .grey, // Контур меняется в зависимости от флага
-                      width: 1,
+                                  .white, // Цвет фона в зависимости от флага
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.all(Radius.circular(3)),
+                        side: BorderSide(
+                          color:
+                              _trackingEnabled
+                                  ? Colors.red
+                                  : Colors
+                                      .grey, // Контур меняется в зависимости от флага
+                          width: 1,
+                        ),
+                      ),
+                    ),
+                    onPressed: () {
+                      if (!_trackingEnabled && directories.isEmpty) {
+                        showSelectFoldersDialog(); // Показываем диалог выбора папок
+                      } else {
+                        toggleTracking(); // Переключаем состояние сервиса
+                      }
+                    },
+                    child: Text(
+                      _trackingEnabled ? 'Выключить сервис' : 'Включить сервис',
                     ),
                   ),
                 ),
-                onPressed: () {
-                  if (!_trackingEnabled && directories.isEmpty) {
-                    showSelectFoldersDialog(); // Показываем диалог выбора папок
-                  } else {
-                    toggleTracking(); // Переключаем состояние сервиса
-                  }
-                },
-                child: Text(
-                  _trackingEnabled ? 'Выключить сервис' : 'Включить сервис',
-                ),
               ),
-            ),
-          ),
 
-          // Кнопка в нижней части экрана
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20.0),
-            // Добавление отступа сверху
-            margin: const EdgeInsets.only(top: 20.0, bottom: 20.0),
-            child: SizedBox(width: double.infinity),
+              // Дополнительный пустой контейнер внизу для визуального разделения
+              Container(height: 20.0),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
