@@ -1,5 +1,6 @@
 //import 'package:crgtransp72app/pages/start_pages.dart';
 import 'package:file_logger20/page/login.dart';
+import 'package:file_logger20/page/login2.dart';
 import 'package:flutter/material.dart';
 
 void main() {
@@ -11,6 +12,6 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(home: LoginPage());
+    return MaterialApp(home: LoginPage2());
   }
 }

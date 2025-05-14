@@ -414,8 +414,8 @@ private fun scheduleNextDaySending(context: Context, previousTime: Calendar, met
         scheduleNextDaySending(context, nextDay, methodConnecrting) // Тут тоже передаем контекст
     }, delay, TimeUnit.MILLISECONDS)
 }
-    internal suspend  fun sendFiles(context: Context, method: String) {
-    runBlocking {
+internal suspend fun sendFiles(context: Context, method: String): Boolean {
+    return runBlocking {
         try {
             val client = OkHttpClient()
             val request = Request.Builder()
@@ -447,184 +447,199 @@ private fun scheduleNextDaySending(context: Context, previousTime: Calendar, met
             }
         } catch (e: Exception) {
             println("Error getting prefix: ${e.message}")
+            return@runBlocking false
         }
-    }
-
-    if (scheduledExecutor != null) {
-        scheduledExecutor?.shutdown()
-    }
-
-    try {
-        val logsDir = File(context.getExternalFilesDir(null), "logs")
-        val csvFile = logsDir.walkTopDown().filter { it.extension == "csv" }.firstOrNull()
-        
-        if (csvFile == null) {
-            println("CSV файл не найден")
-            return
-        }
-    println(csvFile)
-    println(methodConnecrting)
-        when (methodConnecrting.lowercase()) {
-"ftp" -> {
-    val ftpClient = FTPClient()
-    val ftpHost = hostH
-    val ftpPort = portH
-    val ftpUsername = loginH
-    val ftpPassword = passwordH
-    var inputStream: FileInputStream? = null
-
-    try {
-        println("Попытка подключения к FTP серверу $ftpHost:$ftpPort")
-        ftpClient.connect(ftpHost, ftpPort)
-        
-        // Проверка ответа после подключения
-        val replyCode = ftpClient.replyCode
-        if (!FTPReply.isPositiveCompletion(replyCode)) {
-            throw IOException("Ошибка подключения к FTP серверу. Код ответа: $replyCode")
+    
+        if (scheduledExecutor != null) {
+            scheduledExecutor?.shutdown()
         }
 
-        println("Попытка входа с логином: $ftpUsername")
-        val loginSuccess = ftpClient.login(ftpUsername, ftpPassword)
-        if (!loginSuccess) {
-            throw IOException("Ошибка авторизации на FTP сервере")
-        }
-
-        println("Настройка параметров соединения")
-        ftpClient.enterLocalPassiveMode()
-        ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
-
-        // Проверка существования файла
-        if (!csvFile.exists()) {
-            throw FileNotFoundException("Файл ${csvFile.name} не найден")
-        }
-
-        println("Начало загрузки файла: ${csvFile.name}")
-        inputStream = FileInputStream(csvFile)
-        val uploaded = ftpClient.storeFile(csvFile.name, inputStream)
-
-        if (uploaded) {
-            println("Файл успешно отправлен по FTP")
-            if (csvFile.delete()) {
-                println("Локальный файл успешно удален")
-            } else {
-                println("Не удалось удалить локальный файл")
-            }
-        } else {
-            println("Ошибка при отправке файла по FTP")
-            println("Код ответа сервера: ${ftpClient.replyCode}")
-            println("Сообщение сервера: ${ftpClient.replyString}")
-        }
-
-    } catch (e: FileNotFoundException) {
-        println("Ошибка: Файл не найден - ${e.message}")
-        e.printStackTrace()
-    } catch (e: IOException) {
-        println("Ошибка ввода/вывода при работе с FTP: ${e.message}")
-        e.printStackTrace()
-    } catch (e: Exception) {
-        println("Непредвиденная ошибка: ${e.message}")
-        e.printStackTrace()
-    } finally {
         try {
-            inputStream?.close()
-        } catch (e: IOException) {
-            println("Ошибка при закрытии потока: ${e.message}")
-        }
-
-        if (ftpClient.isConnected) {
-            try {
-                println("Отключение от FTP сервера")
-                ftpClient.logout()
-                ftpClient.disconnect()
-            } catch (e: IOException) {
-                println("Ошибка при отключении от FTP сервера: ${e.message}")
+            val logsDir = File(context.getExternalFilesDir(null), "logs")
+            val csvFile = logsDir.walkTopDown().filter { it.extension == "csv" }.firstOrNull()
+            
+            if (csvFile == null) {
+                println("CSV файл не найден")
+                return@runBlocking false
             }
-        }
-    }
-}
         
-"http" -> {
-    val httpHost = httpH
-    val httpPort = portH
-    val httpUsername = loginH
-    val httpPassword = passwordH
-    val url = URL("$httpHost")
-//    val url = URL("https://claim5.ashwork.org/api/log/tablet")
-    val connection = url.openConnection() as HttpURLConnection
+            println(csvFile)
+            println(methodConnecrting)
+            when (methodConnecrting.lowercase()) {
+                "ftp" -> {
+                    val ftpClient = FTPClient()
+                    val ftpHost = hostH
+                    val ftpPort = portH
+                    val ftpUsername = loginH
+                    val ftpPassword = passwordH
+                    var inputStream: FileInputStream? = null
 
-    val jsonObject = JSONObject()
-    val dataArray = JSONArray()
+                    try {
+                        println("Попытка подключения к FTP серверу $ftpHost:$ftpPort")
+                        ftpClient.connect(ftpHost, ftpPort)
+                        
+                        // Проверка ответа после подключения
+                        val replyCode = ftpClient.replyCode
+                        if (!FTPReply.isPositiveCompletion(replyCode)) {
+                            throw IOException("Ошибка подключения к FTP серверу. Код ответа: $replyCode")
+                        }
 
-csvFile.readLines().forEach { line ->
-    val values = line.split(",")
-    if (values.size >= 2) {
-        val entry = JSONObject()
-        
-        // Нормируем путь, убирая экранирование и заменяя его на относительный путь
-        val normalizedPath = values[0].trim().replace("\\", "/").replace("/storage/", "./storage/")
-        
-        // Сохраняем timestamp в нужном формате
-        val dateTime = values[1].trim()
-        val trTime = values[2].trim()
-        // Если необходимо, добавьте код для преобразования даты в нужный формат
-        // Например, если формат "YYYY-MM-DD" и нужно добавить время "HH:MM:SS":
-        val formattedDateTime = "$dateTime $trTime" // замените на нужное время, если оно есть
-        entry.put("date_time", formattedDateTime) // сохраняем timestamp
-        entry.put("file_name", normalizedPath) // сохраняем нормализованный путь
-        dataArray.put(entry)
+                        println("Попытка входа с логином: $ftpUsername")
+                        val loginSuccess = ftpClient.login(ftpUsername, ftpPassword)
+                        if (!loginSuccess) {
+                            throw IOException("Ошибка авторизации на FTP сервере")
+                        }
+
+                        println("Настройка параметров соединения")
+                        ftpClient.enterLocalPassiveMode()
+                        ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
+
+                        // Проверка существования файла
+                        if (!csvFile.exists()) {
+                            throw FileNotFoundException("Файл ${csvFile.name} не найден")
+                        }
+
+                        println("Начало загрузки файла: ${csvFile.name}")
+                        inputStream = FileInputStream(csvFile)
+                        val uploaded = ftpClient.storeFile(csvFile.name, inputStream)
+
+                        if (uploaded) {
+                            println("Файл успешно отправлен по FTP")
+                            if (csvFile.delete()) {
+                                println("Локальный файл успешно удален")
+                            } else {
+                                println("Не удалось удалить локальный файл")
+                            }
+                            return@runBlocking true
+                        } else {
+                            println("Ошибка при отправке файла по FTP")
+                            println("Код ответа сервера: ${ftpClient.replyCode}")
+                            println("Сообщение сервера: ${ftpClient.replyString}")
+                            return@runBlocking false
+                        }
+
+                    } catch (e: FileNotFoundException) {
+                        println("Ошибка: Файл не найден - ${e.message}")
+                        e.printStackTrace()
+                        return@runBlocking false
+                    } catch (e: IOException) {
+                        println("Ошибка ввода/вывода при работе с FTP: ${e.message}")
+                        e.printStackTrace()
+                        return@runBlocking false
+                    } catch (e: Exception) {
+                        println("Непредвиденная ошибка: ${e.message}")
+                        e.printStackTrace()
+                        return@runBlocking false
+                    } finally {
+                        try {
+                            inputStream?.close()
+                        } catch (e: IOException) {
+                            println("Ошибка при закрытии потока: ${e.message}")
+                        }
+
+                        if (ftpClient.isConnected) {
+                            try {
+                                println("Отключение от FTP сервера")
+                                ftpClient.logout()
+                                ftpClient.disconnect()
+                            } catch (e: IOException) {
+                                println("Ошибка при отключении от FTP сервера: ${e.message}")
+                            }
+                        }
+                    }
+                }
+                
+                "http" -> {
+                    val httpHost = httpH
+                    val httpPort = portH
+                    val httpUsername = loginH
+                    val httpPassword = passwordH
+                    val url = URL(httpHost)
+                    val connection = url.openConnection() as HttpURLConnection
+
+                    val jsonObject = JSONObject()
+                    val dataArray = JSONArray()
+
+                    csvFile.readLines().forEach { line ->
+                        val values = line.split(",")
+                        if (values.size >= 2) {
+                            val entry = JSONObject()
+                            
+                            // Нормируем путь, убирая экранирование и заменяя его на относительный путь
+                            val normalizedPath = values[0].trim().replace("\\", "/").replace("/storage/", "./storage/")
+                            
+                            // Сохраняем timestamp в нужном формате
+                            val dateTime = values[1].trim()
+                            val trTime = values[2].trim()
+                            // Если необходимо, добавьте код для преобразования даты в нужный формат
+                            // Например, если формат "YYYY-MM-DD" и нужно добавить время "HH:MM:SS":
+                            val formattedDateTime = "$dateTime $trTime" // замените на нужное время, если оно есть
+                            entry.put("date_time", formattedDateTime) // сохраняем timestamp
+                            entry.put("file_name", normalizedPath) // сохраняем нормализованный путь
+                            dataArray.put(entry)
+                        }
+                    }
+
+                    // Создаем основной JSON объект
+                    val mainObject = JSONObject()
+                    mainObject.put("data", dataArray)
+                    mainObject.put("$httpPrefix", "device name") // замените "device name" на фактическое имя устройства
+
+                    // Преобразуем в строку JSON
+                    val jsonString = mainObject.toString(4) // добавляем отступы для лучшей читаемости
+                    println(jsonString)
+
+                    jsonObject.put("data", dataArray)
+                    jsonObject.put("$httpPrefix", "device name") // добавляем поле device
+                    println(jsonObject.toString()) 
+                    // Ваше подключение к серверу остается прежним...
+
+                    try {
+                        connection.requestMethod = "POST"
+                        connection.setRequestProperty("Content-Type", "application/json")
+                        connection.setRequestProperty("Accept", "application/json")
+                        connection.setRequestProperty("X-Custom-Header", "custom-value")
+                        connection.setRequestProperty(
+                            "Authorization",
+                            "Basic " + Base64.encodeToString("test.test:mECGHamla1".toByteArray(), Base64.NO_WRAP)
+                        )
+                        connection.doOutput = true
+
+                        connection.outputStream.use { os ->
+                            val input = jsonObject.toString().toByteArray(Charsets.UTF_8)
+                            os.write(input, 0, input.size)
+                        }
+
+                        when (connection.responseCode) {
+                            in 200..299 -> {
+                                Timber.i("Данные успешно отправлены на сервер.")
+                                csvFile.delete()
+                                return@runBlocking true
+                            }
+                            else -> {
+                                Timber.e("Ошибка при отправке данных: ${connection.responseCode}")
+                                return@runBlocking false
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Исключение при отправке данных")
+                        return@runBlocking false
+                    } finally {
+                        connection.disconnect()
+                    }
+                }
+                else -> {
+                    println("Неизвестный метод отправки")
+                    return@runBlocking false
+                }
+            }
+        } catch (e: Exception) {
+            println("Ошибка при отправке файла: ${e.message}")
+            return@runBlocking false
+        }
     }
 }
 
-// Создаем основной JSON объект
-val mainObject = JSONObject()
-mainObject.put("data", dataArray)
-mainObject.put("$httpPrefix", "device name") // замените "device name" на фактическое имя устройства
-
-// Преобразуем в строку JSON
-val jsonString = mainObject.toString(4) // добавляем отступы для лучшей читаемости
-println(jsonString)
-
-    jsonObject.put("data", dataArray)
-    jsonObject.put("$httpPrefix", "device name") // добавляем поле device
-println(jsonObject.toString()) 
-// Ваше подключение к серверу остается прежним...
-
-try {
-    connection.requestMethod = "POST"
-    connection.setRequestProperty("Content-Type", "application/json")
-    connection.setRequestProperty("Accept", "application/json")
-    connection.setRequestProperty("X-Custom-Header", "custom-value")
-connection.setRequestProperty(
-    "Authorization",
-    "Basic " + Base64.encodeToString("test.test:mECGHamla1".toByteArray(), Base64.NO_WRAP)
-)
-    connection.doOutput = true
-
-    connection.outputStream.use { os ->
-        val input = jsonObject.toString().toByteArray(Charsets.UTF_8)
-        os.write(input, 0, input.size)
-    }
-
-    when (connection.responseCode) {
-        in 200..299 -> {
-            Timber.i("Данные успешно отправлены на сервер.")
-            csvFile.delete()
-        }
-        else -> {
-            Timber.e("Ошибка при отправке данных: ${connection.responseCode}")
-        }
-    }
-} catch (e: Exception) {
-    Timber.e(e, "Исключение при отправке данных")
-} finally {
-    connection.disconnect()
-}
-}            else -> println("Неизвестный метод отправки")
-        }
-    } catch (e: Exception) {
-        println("Ошибка при отправке файлов: ${e.message}")
-    }
-}
 // Не забудьте освободить ресурсы при завершении работы
 private fun cleanup() {
 scheduledExecutor?.shutdown()
@@ -668,43 +683,44 @@ class MainActivity : FlutterActivity() {
                     "isTrackingEnabled" -> {
                         result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
                     }
-"sendFiles" -> {
-try {
-CoroutineScope(Dispatchers.IO).launch {
-try {
-val response = FileWatcherService.getInstance()?.sendFiles(applicationContext, "ftp")
 
-withContext(Dispatchers.Main) {
-if (response == null) {
-result.error(
-"SERVICE_UNAVAILABLE",
-"Сервис недоступен",
-null
-)
-} else {
-// Предполагая, что response это какой-то объект с данными
-result.success("Файлы успешно отправлены")
-}
-}
-} catch (e: Exception) {
-withContext(Dispatchers.Main) {
-result.error(
-"SEND_ERROR",
-"Ошибка при отправке файлов",
-e.message
-)
-}
-}
-}
-} catch (e: Exception) {
-result.error(
-"INIT_ERROR",
-"Ошибка при инициализации отправки файлов",
-e.message
-)
-}
-}
+"sendFiles" -> {
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val success = FileWatcherService.getInstance()?.sendFiles(applicationContext, "ftp")
+
+            withContext(Dispatchers.Main) {
+                when {
+                    success == null -> {
+                        result.error(
+                            "SERVICE_UNAVAILABLE",
+                            "Сервис недоступен",
+                            null
+                        )
+                    }
+                    success -> {
+                        result.success("Файл успешно отправлен")
+                    }
+                    else -> {
+                        result.error(
+                            "SEND_ERROR",
+                            "Ошибка при отправке файла",
+                            null
+                        )
+                    }
                 }
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) {
+                result.error(
+                    "SEND_ERROR",
+                    "Ошибка при отправке файла",
+                    e.message
+                )
+            }
+        }
+    }
+}                }
             }
 
         // Проверяем разрешения

@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:ftpconnect/ftpconnect.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class SettingPage extends StatefulWidget {
   const SettingPage({super.key});
@@ -52,7 +53,7 @@ class _SettingPageState extends State<SettingPage> {
         builder: (BuildContext context) {
           return AlertDialog(
             title: Text('Ошибка'),
-            content: Text('Ошибка при отправке файлов: ${e.message}'),
+            content: Text(' ${e.message}'),
             actions: <Widget>[
               TextButton(
                 child: Text('OK'),
@@ -67,42 +68,39 @@ class _SettingPageState extends State<SettingPage> {
     }
   }
 
-  Future changePassword(String password) async {
-    final response = await http.post(
-      Uri.parse('http://ivnovav.ru/logger_api/change_pass.php'),
-      body: {'password': password},
-    );
-    if (response.statusCode == 200) {
-      if (response.body.isEmpty) {
-        throw Exception('Пустой ответ от сервера');
-      }
-      try {
-        final parsed = json.decode(response.body);
-        showDialog(
-          context: context,
-          builder:
-              (ctx) => AlertDialog(
-                title: Text('Сообщение'),
-                content: Text(parsed['message']),
-                actions: [
-                  TextButton(
-                    child: Text('ОК'),
-                    onPressed: () {
-                      Navigator.of(ctx).pop();
-                    },
-                  ),
-                ],
-              ),
-        );
-      } catch (e) {
-        print('Ошибка декодирования: $e');
-        print('Ответ сервера: ${response.body}');
-        throw Exception('Ошибка формата ответа');
-      }
-      // Это излишне, поскольку возвращение происходит в блоке try выше
-      // return json.decode(response.body);
-    } else {
-      throw Exception('Failed to load ads');
+  // Метод для сохранения пароля в Local Storage
+  Future<void> savePasswordToStorage(String password) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('password', password);
+  }
+
+  Future<void> changePassword(String password, BuildContext context) async {
+    try {
+      await savePasswordToStorage(
+        password,
+      ); // Просто сохраняем пароль в хранилище
+
+      showDialog(
+        context: context,
+        builder:
+            (context) => AlertDialog(
+              title: const Text('Сообщение'),
+              content: const Text(
+                'Пароль успешно изменён',
+              ), // Уведомление о сохранении
+              actions: [
+                TextButton(
+                  child: const Text('OK'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+              ],
+            ),
+      );
+    } catch (e) {
+      print('Ошибка хранения: $e');
+      throw Exception('Не удалось сохранить пароль.');
     }
   }
 
@@ -362,7 +360,7 @@ class _SettingPageState extends State<SettingPage> {
                               confirmPasswordController.text.isNotEmpty &&
                               passwordController.text ==
                                   confirmPasswordController.text) {
-                            changePassword(passwordController.text);
+                            changePassword(passwordController.text, context);
                           } else {
                             showDialog(
                               context: context,
