@@ -53,7 +53,7 @@ class _SettingPageState extends State<SettingPage> {
         builder: (BuildContext context) {
           return AlertDialog(
             title: Text('Ошибка'),
-            content: Text(' ${e.message}'),
+            content: Text('${e.message}'),
             actions: <Widget>[
               TextButton(
                 child: Text('OK'),

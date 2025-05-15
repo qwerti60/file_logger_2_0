@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:workmanager/workmanager.dart';
 import 'package:http/http.dart' as http;
@@ -35,6 +36,7 @@ class _MonitoringPageState extends State<MonitoringPage> {
   static const platform = MethodChannel('samples.flutter.dev/files');
   bool isBackgroundModeEnabled = false;
   bool _trackingEnabled = false;
+  final ScrollController _scrollController = ScrollController();
   @override
   void initState() {
     super.initState();
@@ -103,7 +105,6 @@ class _MonitoringPageState extends State<MonitoringPage> {
   List<String> directories = [];
   // Модифицируем _pickDirectory метод
   //List<String> directories = [];
-
   Future<void> _pickDirectory() async {
     final result = await FilePicker.platform.getDirectoryPath();
 
@@ -120,7 +121,7 @@ class _MonitoringPageState extends State<MonitoringPage> {
           });
         }
 
-        // Теперь отправьте полный список путей серверу
+        // Отправляем полный список серверу
         final response = await Dio().post(
           'http://ivnovav.ru/logger_api/add_directory.php',
           data: {'directories': directories},
@@ -129,6 +130,17 @@ class _MonitoringPageState extends State<MonitoringPage> {
         if (response.statusCode == 200) {
           print("Все директории успешно добавлены!");
           print(directories);
+
+          // Ждём, пока дерево виджетов обновится, и только после этого производим скроллинг
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: Duration(
+                milliseconds: 300,
+              ), // Время анимации (например, 300 мс)
+              curve: Curves.easeInOut, // Кривая движения
+            );
+          });
         } else {
           print("Ошибка при добавлении директорий.");
         }
@@ -192,6 +204,10 @@ class _MonitoringPageState extends State<MonitoringPage> {
 
         setState(() {
           directories = existingDirectories;
+        });
+        // Выполняем автоматический скроллинг после обновления списка директорий
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
         });
       }
     } else {
@@ -257,13 +273,13 @@ class _MonitoringPageState extends State<MonitoringPage> {
   }
 */
   @override
-  @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text('File logger 2.0')),
       body: SafeArea(
         // Добавляем SafeArea для предотвращения проблем с навигационной панелью
         child: SingleChildScrollView(
+          controller: _scrollController,
           // Прокручиваемый контейнер
           child: Column(
             mainAxisSize: MainAxisSize.min, // Минимизируем размер столбца
@@ -310,63 +326,65 @@ class _MonitoringPageState extends State<MonitoringPage> {
                   ),
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                margin: const EdgeInsets.only(top: 20.0),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: TextButton(
-                    style: TextButton.styleFrom(
-                      fixedSize: const Size(double.infinity, 50),
-                      foregroundColor: Colors.black, // Черный текст
-                      backgroundColor: Colors.white, // Белый фон
-                      disabledForegroundColor:
-                          Colors
-                              .grey, // Используем уже объявленные цвета для демонстрации
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.all(Radius.circular(3)),
-                        side: BorderSide(
-                          color: Colors.grey,
-                          width: 1,
-                        ), // Серый контур толщиной в 1
+              if (directories.isNotEmpty)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 20.0),
+                  margin: const EdgeInsets.only(top: 20.0),
+                  child: SizedBox(
+                    width: double.infinity,
+                    child: TextButton(
+                      style: TextButton.styleFrom(
+                        fixedSize: const Size(double.infinity, 50),
+                        foregroundColor: Colors.black, // Черный текст
+                        backgroundColor: Colors.white, // Белый фон
+                        disabledForegroundColor:
+                            Colors
+                                .grey, // Используем уже объявленные цвета для демонстрации
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.all(Radius.circular(3)),
+                          side: BorderSide(
+                            color: Colors.grey,
+                            width: 1,
+                          ), // Серый контур толщиной в 1
+                        ),
                       ),
-                    ),
-                    onPressed: () async {
-                      bool confirmed =
-                          await showDialog<bool>(
-                            context: context,
-                            builder: (context) {
-                              return AlertDialog(
-                                title: Text("Подтверждение удаления"),
-                                content: Text(
-                                  "Вы уверены, что хотите очистить все директории?",
-                                ),
-                                actions: [
-                                  TextButton(
-                                    child: Text("Отмена"),
-                                    onPressed:
-                                        () => Navigator.of(context).pop(false),
+                      onPressed: () async {
+                        bool confirmed =
+                            await showDialog<bool>(
+                              context: context,
+                              builder: (context) {
+                                return AlertDialog(
+                                  title: Text("Подтверждение удаления"),
+                                  content: Text(
+                                    "Вы уверены, что хотите очистить все директории?",
                                   ),
-                                  TextButton(
-                                    child: Text("Удалить"),
-                                    onPressed:
-                                        () => Navigator.of(context).pop(true),
-                                  ),
-                                ],
-                              );
-                            },
-                          ) ??
-                          false;
+                                  actions: [
+                                    TextButton(
+                                      child: Text("Отмена"),
+                                      onPressed:
+                                          () =>
+                                              Navigator.of(context).pop(false),
+                                    ),
+                                    TextButton(
+                                      child: Text("Удалить"),
+                                      onPressed:
+                                          () => Navigator.of(context).pop(true),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ) ??
+                            false;
 
-                      if (confirmed) {
-                        print("Пользователь подтвердил очистку");
-                        clearSelectedDirectories(directories);
-                      }
-                    },
-                    child: const Text('Очистить'),
+                        if (confirmed) {
+                          print("Пользователь подтвердил очистку");
+                          clearSelectedDirectories(directories);
+                        }
+                      },
+                      child: const Text('Очистить'),
+                    ),
                   ),
                 ),
-              ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 20.0),
                 margin: const EdgeInsets.only(top: 20.0),

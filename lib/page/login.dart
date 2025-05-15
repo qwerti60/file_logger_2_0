@@ -158,7 +158,7 @@ class _LoginState extends State<LoginPage> {
                 ),
               ),
             ),
-            /*Container(
+            Container(
               padding: const EdgeInsets.symmetric(horizontal: 20.0),
               margin: const EdgeInsets.only(top: 20.0),
               child: SizedBox(
@@ -190,7 +190,7 @@ class _LoginState extends State<LoginPage> {
                 ),
               ),
             ),
-                       Container(
+            /*          Container(
               padding: const EdgeInsets.symmetric(horizontal: 20.0),
               margin: const EdgeInsets.only(top: 20.0),
               child: SizedBox(

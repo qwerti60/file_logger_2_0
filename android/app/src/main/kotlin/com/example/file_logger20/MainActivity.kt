@@ -77,6 +77,8 @@ import java.nio.file.StandardWatchEventKinds
 import java.nio.file.*
 import java.time.Duration
 import timber.log.Timber
+import android.os.Handler
+import android.os.Looper
 private var scheduledExecutor: ScheduledExecutorService? = null
 private val startHour = 8 // Начало рабочего дня
 private val endHour = 23 // Конец рабочего дня
@@ -104,11 +106,12 @@ class FileWatcherService : Service() {
 private var fileObserver: FileObserver? = null
 private val fileObservers = mutableListOf<FileObserver>()
 private var trackingEnabled = false
-
+private var lastDirEventTime: LocalDateTime? = null
 companion object {
 const val CHANNEL = "samples.flutter.dev/files"
 private var instance: FileWatcherService? = null
-
+ const val MIN_EVENTS = 2
+ 
 fun getInstance(): FileWatcherService? = instance
 }
 
@@ -140,8 +143,8 @@ notificationManager.createNotificationChannel(channel)
 
 // Создаем уведомление
 val notification = NotificationCompat.Builder(this, "file_watcher_channel")
-.setContentTitle("File Watcher")
-.setContentText("Service is running")
+.setContentTitle("Аудит File Logger 2.0")
+.setContentText("Сервис запущен")
 .setSmallIcon(R.drawable.ic_notification)
 .build()
 
@@ -207,7 +210,9 @@ fun fetchDirectoriesAndStartWatching() {
 // Переменная для хранения временных меток последних событий по каждому пути
 private val lastEventsByPath = mutableMapOf<Path, LocalDateTime>()
 var lastEventTimes = mutableMapOf<File, LocalDateTime>()
- 
+
+private val fileEventCounter = mutableMapOf<String, Int>()
+
 private fun initializeFileObservers(pathsToWatch: List<String>) {
     var prefix1 = "_default"
     var separators = "0"
@@ -251,59 +256,98 @@ override fun onEvent(event: Int, path: String?) {
     if (path != null) {
         val fullPath = File(pathToWatch, path)
     
-        if ((event == FileObserver.ACCESS || event == FileObserver.MODIFY || event == FileObserver.OPEN) &&
-            fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
-        
-            val now = LocalDateTime.now()
-            val currentTime = LocalDateTime.now()
-            val previousEventTime = lastEventsByPath[Paths.get(pathToWatch)]
-        
-            // Пропускаем событие, если интервал меньше секунды
-            if (previousEventTime != null && Duration.between(previousEventTime, currentTime).seconds < 3L) return
-        
-            val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-            val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-            val timeFormatterf = DateTimeFormatter.ofPattern("HHmm")
-            val dateFormatterf = DateTimeFormatter.ofPattern("ddMMyy")
-        
-            println("Event: $event at path: $fullPath.absolutePath on ${LocalDateTime.now()}")
-        
-            // Директория хранения логов
-            val appDir = File(getExternalFilesDir(null), "logs")
-            if (!appDir.exists()) {
-                appDir.mkdirs()
-            }
-        
-            // Поиск подходящего CSV файла
-            val csvFile = appDir.listFiles { file ->
-                file.name.endsWith(".csv")
-            }?.firstOrNull() ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv")
-        
-            try {
-                if (!csvFile.exists()) {
-                    csvFile.createNewFile()
-                }
-            
-                // Подготовка записи
-                val newEntry = when(separators.toInt()) {
-                    1 -> listOf(fullPath.absolutePath, now.format(dateFormatter), now.format(timeFormatter)).joinToString(",")
-                    else -> "${fullPath.absolutePath}${fullPath.name}${now.format(dateFormatter)}${now.format(timeFormatter)}"
-                }.plus("\n")
-            
-                println("Adding entry for file: $fullPath")
-            
-                // Добавление записи в CSV
-                csvFile.appendText(newEntry)
-                println("Successfully added entry to $csvFile: $newEntry")
-            
-                // Сохраняем новую временную отметку
-                lastEventsByPath[Paths.get(pathToWatch)] = currentTime
-            } catch (e: Exception) {
-                e.printStackTrace()
-                println("Error writing to CSV: ${e.message}")
-            }
-        }
+if ((event == FileObserver.ACCESS || event == FileObserver.MODIFY || event == FileObserver.OPEN) && 
+    fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
+    
+    // Базовые проверки
+    if (!fullPath.canRead() || fullPath.length() == 0L) return
+    
+    // Проверка расширения
+    val allowedExtensions = listOf(
+        // Документы
+        "doc", "docx", "pdf", "txt", "xls", "xlsx", "rtf", "odt", "ods",
+        // Изображения
+        "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "svg", "raw", "cr2", "nef",
+        // Видео
+        "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp"
+    )
+    
+if (!allowedExtensions.contains(fullPath.extension.lowercase())) return
+    
+    // Проверка временных файлов
+    if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) return
+    
+    // Проверка минимального размера
+    if (fullPath.length() < 1024L) return
+    
+    // Проверка количества событий
+    val filePath = fullPath.absolutePath
+    val eventCount = fileEventCounter.getOrDefault(filePath, 0) + 1
+    fileEventCounter[filePath] = eventCount
+    if (eventCount < MIN_EVENTS) return
+
+    val now = LocalDateTime.now()
+    val currentTime = LocalDateTime.now()
+    val previousEventTime = lastEventsByPath[Paths.get(pathToWatch)]
+    val previousDirEventTime = lastDirEventTime
+
+    // Пропускаем событие, если после изменения директории прошло менее 3 секунд
+    if (previousDirEventTime != null && Duration.between(previousDirEventTime, currentTime).seconds < 3L) {
+        return
     }
+
+    // Пропускаем событие, если интервал меньше 2 секунд
+    if (previousEventTime != null && Duration.between(previousEventTime, currentTime).seconds < 2L) {
+        return
+    }
+
+    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+    val timeFormatterf = DateTimeFormatter.ofPattern("HHmm")
+    val dateFormatterf = DateTimeFormatter.ofPattern("ddMMyy")
+
+    println("Event: $event at path: $fullPath.absolutePath on ${LocalDateTime.now()}")
+
+    // Директория хранения логов
+    val appDir = File(getExternalFilesDir(null), "logs")
+    if (!appDir.exists()) {
+        appDir.mkdirs()
+    }
+
+    // Поиск подходящего CSV файла
+    val csvFile = appDir.listFiles { file ->
+        file.name.endsWith(".csv")
+    }?.firstOrNull() ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv")
+
+    try {
+        if (!csvFile.exists()) {
+            csvFile.createNewFile()
+        }
+    
+        // Подготовка записи
+        val newEntry = when(separators.toInt()) {
+            1 -> listOf(fullPath.absolutePath, now.format(dateFormatter), now.format(timeFormatter)).joinToString(",")
+            else -> "${fullPath.absolutePath}${fullPath.name}${now.format(dateFormatter)}${now.format(timeFormatter)}"
+        }.plus("\n")
+    
+        println("Adding entry for file: $fullPath")
+    
+        // Добавление записи в CSV
+        csvFile.appendText(newEntry)
+        println("Successfully added entry to $csvFile: $newEntry")
+    
+        // Сохраняем новую временную отметку
+        lastEventsByPath[Paths.get(pathToWatch)] = currentTime
+    } catch (e: Exception) {
+        e.printStackTrace()
+        println("Error writing to CSV: ${e.message}")
+    }
+}
+
+// Добавляем обработку события изменения директории
+if (fullPath.isDirectory) {
+    lastDirEventTime = LocalDateTime.now() // Сохраняем время события директории
+}    }
 }
             }
 
@@ -652,14 +696,30 @@ scheduledExecutor?.shutdownNow()
 }
 }
 
+
+fun stopForegroundService() {
+    // Удаляем foreground статус и останавливаем сервис
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+    } else {
+        stopForeground(true)
+    }
+    
+    // Остановка самого сервиса
+    stopSelf()
+}
 private fun toggleFileObserver() {
 trackingEnabled = !trackingEnabled
 if (trackingEnabled) {
 fileObserver?.startWatching()
 } else {
 fileObserver?.stopWatching()
+        stopForegroundService() // Добавляем вызов метода для остановки сервиса и удаления уведомления
+
 }
 }
+
+
 
 fun isTrackingEnabled() = trackingEnabled
 }
@@ -668,7 +728,7 @@ fun isTrackingEnabled() = trackingEnabled
 class MainActivity : FlutterActivity() {
 
     private val REQUEST_PERMISSION_CODE = 100
-
+    
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -676,10 +736,19 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileWatcherService.CHANNEL)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
-                    "toggleTracking" -> {
-                        FileWatcherService.getInstance()?.toggleTracking()
-                        result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
-                    }
+"toggleTracking" -> {
+    val serviceIntent = Intent(this, FileWatcherService::class.java)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        startForegroundService(serviceIntent)
+    } else {
+        startService(serviceIntent)
+    }
+    
+    Handler(Looper.getMainLooper()).postDelayed({
+        FileWatcherService.getInstance()?.toggleTracking()
+        result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
+    }, 500) // задержка в 500 миллисекунд
+}
                     "isTrackingEnabled" -> {
                         result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
                     }
@@ -726,13 +795,7 @@ class MainActivity : FlutterActivity() {
         // Проверяем разрешения
         checkPermissions()
 
-        // Запускаем сервис
-        val serviceIntent = Intent(this, FileWatcherService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+
     }
 
     private fun checkPermissions() {
