@@ -79,6 +79,11 @@ import java.time.Duration
 import timber.log.Timber
 import android.os.Handler
 import android.os.Looper
+
+import java.util.concurrent.ConcurrentHashMap
+
+import android.media.MediaMetadataRetriever
+import java.nio.file.Paths
 private var scheduledExecutor: ScheduledExecutorService? = null
 private val startHour = 8 // Начало рабочего дня
 private val endHour = 23 // Конец рабочего дня
@@ -107,6 +112,9 @@ private var fileObserver: FileObserver? = null
 private val fileObservers = mutableListOf<FileObserver>()
 private var trackingEnabled = false
 private var lastDirEventTime: LocalDateTime? = null
+
+// Глобальный список зарегистрированных видео
+val loggedVideos = mutableSetOf<String>()
 companion object {
 const val CHANNEL = "samples.flutter.dev/files"
 private var instance: FileWatcherService? = null
@@ -212,7 +220,9 @@ private val lastEventsByPath = mutableMapOf<Path, LocalDateTime>()
 var lastEventTimes = mutableMapOf<File, LocalDateTime>()
 
 private val fileEventCounter = mutableMapOf<String, Int>()
-
+    private var lastAccessTime: LocalDateTime = LocalDateTime.MIN
+    private var currentTime: LocalDateTime = LocalDateTime.now()
+    private val duration: Long = 1000L // Минимальная задержка между двумя событиями
 private fun initializeFileObservers(pathsToWatch: List<String>) {
     var prefix1 = "_default"
     var separators = "0"
@@ -252,104 +262,117 @@ private fun initializeFileObservers(pathsToWatch: List<String>) {
         val directory = File(pathToWatch)
         if (directory.exists() && directory.isDirectory && directory.canRead()) {
             val fileObserver = object : FileObserver(pathToWatch, FileObserver.ALL_EVENTS) {
+
+// Хранилище времени последнего обращения к файлам
+var lastEventsByPath = ConcurrentHashMap<String, LocalDateTime>()
+
+// Набор зарегистрированных видеофайлов
+val registeredVideos = HashSet<String>()
+
 override fun onEvent(event: Int, path: String?) {
     if (path != null) {
         val fullPath = File(pathToWatch, path)
-    
-if ((event == FileObserver.ACCESS || event == FileObserver.MODIFY || event == FileObserver.OPEN) && 
-    fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
-    
-    // Базовые проверки
-    if (!fullPath.canRead() || fullPath.length() == 0L) return
-    
-    // Проверка расширения
-    val allowedExtensions = listOf(
-        // Документы
-        "doc", "docx", "pdf", "txt", "xls", "xlsx", "rtf", "odt", "ods",
-        // Изображения
-        "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "svg", "raw", "cr2", "nef",
-        // Видео
-        "mp4", "avi", "mkv", "mov", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp"
-    )
-    
-if (!allowedExtensions.contains(fullPath.extension.lowercase())) return
-    
-    // Проверка временных файлов
-    if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) return
-    
-    // Проверка минимального размера
-    if (fullPath.length() < 1024L) return
-    
-    // Проверка количества событий
-    val filePath = fullPath.absolutePath
-    val eventCount = fileEventCounter.getOrDefault(filePath, 0) + 1
-    fileEventCounter[filePath] = eventCount
-    if (eventCount < MIN_EVENTS) return
+        if ((event == FileObserver.ACCESS || event == FileObserver.MODIFY || event == FileObserver.OPEN) &&
+                fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
+            
+            // Проверка читаемости файла и размера
+            if (!fullPath.canRead() || fullPath.length() == 0L) return
 
+            // Проверка временного имени и малого размера файла
+            if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) return
+            if (fullPath.length() < 1024L) return
+
+            // Расширения файлов
+            val videoExtensions = setOf("mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp")
+            val documentAndImageExtensions = setOf(
+                "doc", "docx", "pdf", "txt", "xls", "xlsx", "rtf", "odt", "ods",
+                "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "svg", "raw", "cr2", "nef"
+            )
+
+            // Получаем абсолютный путь
+            val absolutePath = fullPath.absolutePath
+
+            // Проверка расширения файла
+            val ext = fullPath.extension.lowercase()
+
+            // Исключаем APK-файлы
+            if (ext == "apk") return
+
+            // Особый случай для видеофайлов
+            if (videoExtensions.contains(ext)) {
+                // Если видео уже зарегистрировано, пропускаем событие
+                if (registeredVideos.contains(absolutePath)) {
+                    println("Skipped duplicate video log: $absolutePath")
+                    return
+                }
+
+                // Добавляем запись и помечаем её как зарегистрированную
+                addCsvRecord(fullPath)
+                registeredVideos.add(absolutePath)
+            } else {
+                // Обработка остальных файлов (изображения, документы)
+                if (documentAndImageExtensions.contains(ext)) {
+                    // Ограничение частоты повторных записей
+                    val previousEventTime = lastEventsByPath[absolutePath]
+                    if (previousEventTime != null) {
+                        val currentTime = LocalDateTime.now()
+                        val interval = Duration.between(previousEventTime, currentTime)
+                        if (interval.seconds < 2) {
+                            println("Skipped frequent event: $absolutePath")
+                            return
+                        }
+                    }
+                    
+                    // Добавляем запись и запоминаем последний доступ
+                    addCsvRecord(fullPath)
+                    lastEventsByPath[absolutePath] = LocalDateTime.now()
+                }
+            }
+        }
+    }
+}
+
+fun addCsvRecord(fullPath: File) {
     val now = LocalDateTime.now()
-    val currentTime = LocalDateTime.now()
-    val previousEventTime = lastEventsByPath[Paths.get(pathToWatch)]
-    val previousDirEventTime = lastDirEventTime
-
-    // Пропускаем событие, если после изменения директории прошло менее 3 секунд
-    if (previousDirEventTime != null && Duration.between(previousDirEventTime, currentTime).seconds < 3L) {
-        return
-    }
-
-    // Пропускаем событие, если интервал меньше 2 секунд
-    if (previousEventTime != null && Duration.between(previousEventTime, currentTime).seconds < 2L) {
-        return
-    }
-
     val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
     val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
     val timeFormatterf = DateTimeFormatter.ofPattern("HHmm")
     val dateFormatterf = DateTimeFormatter.ofPattern("ddMMyy")
 
-    println("Event: $event at path: $fullPath.absolutePath on ${LocalDateTime.now()}")
-
-    // Директория хранения логов
+    // Директория для логов
     val appDir = File(getExternalFilesDir(null), "logs")
     if (!appDir.exists()) {
-        appDir.mkdirs()
+        if (!appDir.mkdirs()) {
+            throw IOException("Failed to create directory: ${appDir.path}")
+        }
     }
 
-    // Поиск подходящего CSV файла
-    val csvFile = appDir.listFiles { file ->
-        file.name.endsWith(".csv")
-    }?.firstOrNull() ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv")
+    // Ищем существующий файл журнала или создаём новый
+    val csvFile = appDir.listFiles { file -> file.name.endsWith(".csv") }?.firstOrNull()
+        ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv")
 
     try {
+        // Если файл не существует, создаём его
         if (!csvFile.exists()) {
-            csvFile.createNewFile()
+            if (!csvFile.createNewFile()) {
+                throw IOException("Failed to create file: ${csvFile.path}")
+            }
         }
-    
-        // Подготовка записи
+
+        // Генерация строки для записи
         val newEntry = when(separators.toInt()) {
             1 -> listOf(fullPath.absolutePath, now.format(dateFormatter), now.format(timeFormatter)).joinToString(",")
-            else -> "${fullPath.absolutePath}${fullPath.name}${now.format(dateFormatter)}${now.format(timeFormatter)}"
+            else -> "${fullPath.absolutePath},${fullPath.name},${now.format(dateFormatter)},${now.format(timeFormatter)}"
         }.plus("\n")
-    
-        println("Adding entry for file: $fullPath")
-    
-        // Добавление записи в CSV
+
+        // Добавляем запись в CSV
         csvFile.appendText(newEntry)
-        println("Successfully added entry to $csvFile: $newEntry")
-    
-        // Сохраняем новую временную отметку
-        lastEventsByPath[Paths.get(pathToWatch)] = currentTime
+        println("Added record to $csvFile: $newEntry")
     } catch (e: Exception) {
         e.printStackTrace()
-        println("Error writing to CSV: ${e.message}")
+        println("Error adding record to CSV: ${e.message}")
     }
-}
-
-// Добавляем обработку события изменения директории
-if (fullPath.isDirectory) {
-    lastDirEventTime = LocalDateTime.now() // Сохраняем время события директории
-}    }
-}
-            }
+}            }
 
             fileObserver.startWatching()
             fileObservers.add(fileObserver)
