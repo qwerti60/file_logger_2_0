@@ -81,7 +81,7 @@ import android.os.Handler
 import android.os.Looper
 
 import java.util.concurrent.ConcurrentHashMap
-
+import java.util.concurrent.atomic.AtomicInteger
 import android.media.MediaMetadataRetriever
 import java.nio.file.Paths
 private var scheduledExecutor: ScheduledExecutorService? = null
@@ -269,25 +269,33 @@ var lastEventsByPath = ConcurrentHashMap<String, LocalDateTime>()
 // Набор зарегистрированных видеофайлов
 val registeredVideos = HashSet<String>()
 
+    private val videoExtensions = setOf("mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp")
+    private val documentAndImageExtensions = setOf(
+        "doc", "docx", "pdf", "txt", "xls", "xlsx", "rtf", "odt", "ods",
+        "jpg", "gif", "jpeg", "png", "gif", "bmp", "tiff", "webp", "svg", "raw", "cr2", "nef"
+    )
+private val recentEventsCounter = AtomicInteger(0)
 override fun onEvent(event: Int, path: String?) {
     if (path != null) {
         val fullPath = File(pathToWatch, path)
-        if ((event == FileObserver.ACCESS || event == FileObserver.MODIFY || event == FileObserver.OPEN) &&
-                fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
+        
+        if (event == FileObserver.OPEN && fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
             
             // Проверка читаемости файла и размера
-            if (!fullPath.canRead() || fullPath.length() == 0L) return
+            if (!fullPath.canRead() || fullPath.length() == 0L) {
+                println("Skipped unreadable or empty file: $fullPath")
+                return
+            }
 
             // Проверка временного имени и малого размера файла
-            if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) return
-            if (fullPath.length() < 1024L) return
-
-            // Расширения файлов
-            val videoExtensions = setOf("mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp")
-            val documentAndImageExtensions = setOf(
-                "doc", "docx", "pdf", "txt", "xls", "xlsx", "rtf", "odt", "ods",
-                "jpg", "jpeg", "png", "gif", "bmp", "tiff", "webp", "svg", "raw", "cr2", "nef"
-            )
+            if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) {
+                println("Skipped temporary file: $fullPath")
+                return
+            }
+            if (fullPath.length() < 1024L) {
+                println("Skipped small file: $fullPath")
+                return
+            }
 
             // Получаем абсолютный путь
             val absolutePath = fullPath.absolutePath
@@ -296,42 +304,72 @@ override fun onEvent(event: Int, path: String?) {
             val ext = fullPath.extension.lowercase()
 
             // Исключаем APK-файлы
-            if (ext == "apk") return
-
-            // Особый случай для видеофайлов
-            if (videoExtensions.contains(ext)) {
-                // Если видео уже зарегистрировано, пропускаем событие
-                if (registeredVideos.contains(absolutePath)) {
-                    println("Skipped duplicate video log: $absolutePath")
-                    return
-                }
-
-                // Добавляем запись и помечаем её как зарегистрированную
-                addCsvRecord(fullPath)
-                registeredVideos.add(absolutePath)
-            } else {
-                // Обработка остальных файлов (изображения, документы)
-                if (documentAndImageExtensions.contains(ext)) {
-                    // Ограничение частоты повторных записей
-                    val previousEventTime = lastEventsByPath[absolutePath]
-                    if (previousEventTime != null) {
-                        val currentTime = LocalDateTime.now()
-                        val interval = Duration.between(previousEventTime, currentTime)
-                        if (interval.seconds < 2) {
-                            println("Skipped frequent event: $absolutePath")
-                            return
-                        }
-                    }
-                    
-                    // Добавляем запись и запоминаем последний доступ
-                    addCsvRecord(fullPath)
-                    lastEventsByPath[absolutePath] = LocalDateTime.now()
-                }
+            if (ext == "apk") {
+                println("Skipped APK file: $fullPath")
+                return
             }
+
+// Особый случай для видеофайлов
+if (videoExtensions.contains(ext)) {
+    // Если видео уже зарегистрировано, пропускаем событие
+    if (registeredVideos.contains(absolutePath)) {
+        println("Skipped duplicate video log: $absolutePath")
+        // Очищаем регистрации других видео
+        registeredVideos.clear()
+        return
+    }
+
+    // Добавляем запись и помечаем её как зарегистрированную
+    println("Adding video to CSV: $absolutePath")
+    synchronized(this) {
+        addCsvRecord(fullPath)
+    }
+    // Очищаем предыдущие регистрации и добавляем текущее видео
+    registeredVideos.clear()
+    registeredVideos.add(absolutePath)
+} else {
+if (documentAndImageExtensions.contains(ext)) {
+    val previousEventTime = lastEventsByPath[absolutePath]
+    val currentTime = LocalDateTime.now()
+    
+    // Счетчик событий в короткий промежуток времени
+    var recentEventsCount = recentEventsCounter.get() // Use get() instead of getOrDefault
+    
+    if (previousEventTime != null) {
+        val interval = Duration.between(previousEventTime, currentTime)
+        
+        // Увеличенный интервал для игнорирования частых событий (например, 1 секунда)
+        if (interval.toMillis() < 1000) { 
+            recentEventsCount++
+            recentEventsCounter.set(recentEventsCount)
+            
+            // Если много событий за короткий промежуток - вероятно это скроллинг или смена директории
+            if (recentEventsCount > 5) {
+                println("Skipping bulk changes: $absolutePath")
+                return
+            }
+            
+            println("Skipped frequent event: $absolutePath ($interval)")
+            return
+        } else {
+            // Сбрасываем счетчик, если прошло достаточно времени
+            recentEventsCounter.set(0)
         }
     }
+    
+    // Обновляем время последнего события
+    lastEventsByPath[absolutePath] = currentTime
+    
+    // Добавляем запись
+    println("Adding non-video file to CSV: $absolutePath")
+    synchronized(this) {
+        addCsvRecord(fullPath)
+    }
+}    // Очищаем все регистрации видеофайлов после обработки других файлов
+    registeredVideos.clear()
+}        }
+    }
 }
-
 fun addCsvRecord(fullPath: File) {
     val now = LocalDateTime.now()
     val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
@@ -347,32 +385,61 @@ fun addCsvRecord(fullPath: File) {
         }
     }
 
-    // Ищем существующий файл журнала или создаём новый
+    // Создание пути к новому файлу
     val csvFile = appDir.listFiles { file -> file.name.endsWith(".csv") }?.firstOrNull()
-        ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv")
+    ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv").also { newFile ->
+        // Создаем новый файл и добавляем пустую строку
+        newFile.writeText("\n")
+    }
 
     try {
-        // Если файл не существует, создаём его
-        if (!csvFile.exists()) {
-            if (!csvFile.createNewFile()) {
-                throw IOException("Failed to create file: ${csvFile.path}")
+        // Формируем новую запись
+        val newEntry = when(separators.toInt()) {
+            1 -> "${fullPath.absolutePath},${now.format(dateFormatter)},${now.format(timeFormatter)}"
+            else -> "${fullPath.absolutePath},${fullPath.name},${now.format(dateFormatter)},${now.format(timeFormatter)}"
+        }
+
+        // Читаем существующие записи
+        val existingLines = if (csvFile.exists() && csvFile.length() > 0L) {
+            csvFile.readLines().toMutableList()
+        } else {
+            mutableListOf()
+        }
+
+        val newDateTime = "${now.format(dateFormatter)},${now.format(timeFormatter)}"
+        
+        // Удаляем все строки с таким же временем
+        existingLines.removeAll { line ->
+            val fields = line.split(',')
+            when(separators.toInt()) {
+                1 -> fields.size >= 3 && 
+                     "${fields.getOrNull(1)},${fields.getOrNull(2)}" == newDateTime
+                else -> fields.size >= 4 && 
+                        "${fields.getOrNull(2)},${fields.getOrNull(3)}" == newDateTime
             }
         }
 
-        // Генерация строки для записи
-        val newEntry = when(separators.toInt()) {
-            1 -> listOf(fullPath.absolutePath, now.format(dateFormatter), now.format(timeFormatter)).joinToString(",")
-            else -> "${fullPath.absolutePath},${fullPath.name},${now.format(dateFormatter)},${now.format(timeFormatter)}"
-        }.plus("\n")
+        // Добавляем новую запись
+        existingLines.add(newEntry)
 
-        // Добавляем запись в CSV
-        csvFile.appendText(newEntry)
-        println("Added record to $csvFile: $newEntry")
+        // Записываем обновленный список в файл
+        csvFile.parentFile?.mkdirs()
+        csvFile.bufferedWriter().use { writer ->
+            existingLines.forEachIndexed { index, line ->
+                if (index > 0) writer.newLine()
+                writer.write(line)
+            }
+        }
+
+        println("Added record to CSV: $newEntry")
+        println("File path: ${csvFile.absolutePath}")
+        println("Number of records: ${existingLines.size}")
     } catch (e: Exception) {
         e.printStackTrace()
         println("Error adding record to CSV: ${e.message}")
     }
-}            }
+}
+     }
 
             fileObserver.startWatching()
             fileObservers.add(fileObserver)
