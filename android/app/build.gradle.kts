@@ -54,6 +54,7 @@ dependencies {
     implementation ("org.jetbrains.kotlinx:kotlinx-serialization-json:1.5.1")
     implementation ("androidx.core:core-ktx:1.7.0")
     implementation ("com.jakewharton.timber:timber:5.0.1") // используем последнюю версию
-
+    implementation ("androidx.lifecycle:lifecycle-runtime-ktx:2.6.1")
+    implementation ("androidx.lifecycle:lifecycle-viewmodel-ktx:2.6.1")
 
 }

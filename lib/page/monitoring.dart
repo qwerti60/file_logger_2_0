@@ -16,6 +16,9 @@ import 'package:file/local.dart'; // Для работы с файловой с�
 import 'package:file_picker/file_picker.dart';
 import 'package:dio/dio.dart'; // Или другой HTTP клиент
 import 'dart:io';
+import 'dart:io';
+import 'dart:convert';
+import 'package:path_provider/path_provider.dart';
 
 void callbackDispatcher() {
   Workmanager().executeTask((task, inputData) {
@@ -40,7 +43,7 @@ class _MonitoringPageState extends State<MonitoringPage> {
   @override
   void initState() {
     super.initState();
-    fetchDirectories();
+    _loadDirectories();
     checkTrackingStatus(); // Проверка состояния трекинга при старте
   }
 
@@ -105,6 +108,7 @@ class _MonitoringPageState extends State<MonitoringPage> {
   List<String> directories = [];
   // Модифицируем _pickDirectory метод
   //List<String> directories = [];
+
   Future<void> _pickDirectory() async {
     final result = await FilePicker.platform.getDirectoryPath();
 
@@ -121,32 +125,60 @@ class _MonitoringPageState extends State<MonitoringPage> {
           });
         }
 
-        // Отправляем полный список серверу
-        final response = await Dio().post(
-          'http://ivnovav.ru/logger_api/add_directory.php',
-          data: {'directories': directories},
-        );
+        // Сохраняем директории в локальный файл
+        await _saveDirectories();
 
-        if (response.statusCode == 200) {
-          print("Все директории успешно добавлены!");
-          print(directories);
+        print("Все директории успешно добавлены!");
+        print(directories);
 
-          // Ждём, пока дерево виджетов обновится, и только после этого производим скроллинг
-          SchedulerBinding.instance.addPostFrameCallback((_) {
-            _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: Duration(
-                milliseconds: 300,
-              ), // Время анимации (например, 300 мс)
-              curve: Curves.easeInOut, // Кривая движения
-            );
-          });
-        } else {
-          print("Ошибка при добавлении директорий.");
-        }
+        // Ждём, пока дерево виджетов обновится, и только после этого производим скроллинг
+        SchedulerBinding.instance.addPostFrameCallback((_) {
+          _scrollController.animateTo(
+            _scrollController.position.maxScrollExtent,
+            duration: Duration(milliseconds: 300),
+            curve: Curves.easeInOut,
+          );
+        });
       } catch (e) {
         print(e.toString());
       }
+    }
+  }
+
+  // Функция для сохранения директорий
+  Future<void> _saveDirectories() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/directories.json');
+
+      // Преобразуем список директорий в JSON и сохраняем в файл
+      await file.writeAsString(jsonEncode(directories));
+    } catch (e) {
+      print('Ошибка при сохранении директорий: $e');
+    }
+  }
+
+  // Функция для загрузки директорий при запуске приложения
+  Future<void> _loadDirectories() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/directories.json');
+      print(file);
+      if (await file.exists()) {
+        final String contents = await file.readAsString();
+        final List<dynamic> decodedDirectories = jsonDecode(contents);
+
+        setState(() {
+          directories = decodedDirectories.cast<String>().toList();
+        });
+      }
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
+          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+        }
+      });
+    } catch (e) {
+      print('Ошибка при загрузке директорий: $e');
     }
   }
 
@@ -168,50 +200,55 @@ class _MonitoringPageState extends State<MonitoringPage> {
   }
 
   Future<void> fetchDirectories() async {
-    var uri = Uri.parse('http://ivnovav.ru/logger_api/get_directory.php');
-    var response = await http.get(uri);
+    try {
+      // Получаем путь к директории приложения
+      final Directory appDir = await getApplicationDocumentsDirectory();
+      final String appPath = appDir.path;
 
-    if (response.statusCode == 200) {
-      var responseBody = response.body;
+      // Получаем список всех файлов и директорий
+      final Directory directory = Directory(appPath);
+      List<FileSystemEntity> entities =
+          await directory.list(recursive: true).toList();
 
-      // Проверяем, не равно ли тело ответа "0 results"
-      if (responseBody.trim() == "0 results") {
-        print("Директории не найдены.");
-        setState(() {
-          directories = [];
-        });
-      } else {
-        // Преобразуем ответ в динамический список
-        List json = jsonDecode(responseBody);
+      // Фильтруем только директории
+      List<String> newDirectories =
+          entities
+              .where((entity) => entity is Directory)
+              .map((entity) => entity.path)
+              .toList();
 
-        // Получаем список директорий, игнорируя возможные null или некорректные данные
-        List<String> newDirectories =
-            json
-                .where(
-                  (element) =>
-                      element is Map &&
-                      element.containsKey('directory_path') &&
-                      element['directory_path'] is String,
-                )
-                .map((item) => item['directory_path'])
-                .cast<String>()
-                .toList();
+      // Преобразуем пути в относительные (относительно корневой директории приложения)
+      newDirectories =
+          newDirectories.map((path) {
+            return path.replaceFirst(appPath, '');
+          }).toList();
 
-        // Фильтруем и сохраняем только существующие каталоги
-        List<String> existingDirectories = await filterExistingDirectories(
-          newDirectories,
-        );
+      // Удаляем пустые пути и корневую директорию
+      newDirectories = newDirectories.where((path) => path.isNotEmpty).toList();
 
-        setState(() {
-          directories = existingDirectories;
-        });
-        // Выполняем автоматический скроллинг после обновления списка директорий
-        SchedulerBinding.instance.addPostFrameCallback((_) {
+      // Удаляем дубликаты
+      newDirectories = newDirectories.toSet().toList();
+
+      // Фильтруем и сохраняем только существующие каталоги
+      List<String> existingDirectories = await filterExistingDirectories(
+        newDirectories,
+      );
+
+      setState(() {
+        directories = existingDirectories;
+      });
+
+      // Выполняем автоматический скроллинг после обновления списка директорий
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (_scrollController.hasClients) {
           _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        });
-      }
-    } else {
-      print("Ошибка при получении директорий.");
+        }
+      });
+    } catch (e) {
+      print("Ошибка при получении директорий: $e");
+      setState(() {
+        directories = [];
+      });
     }
   }
 
@@ -242,27 +279,28 @@ class _MonitoringPageState extends State<MonitoringPage> {
   Future<void> clearSelectedDirectories(
     List<String> selectedDirectories,
   ) async {
-    var data = {'directories': selectedDirectories};
-    final response = await http.post(
-      Uri.parse('http://ivnovav.ru/logger_api/clearDirectoryes.php'),
-      headers: {"Content-Type": "application/json"},
-      body: json.encode(data),
-    );
+    try {
+      // Получаем директорию приложения
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/directories.json');
 
-    if (response.statusCode == 200) {
-      // Если сервер успешно обработал запрос
-      print('Selected directories cleared successfully');
+      // Обновляем список директорий, удаляя выбранные
       List<String> updatedDirectories =
           directories
               .where((dir) => !selectedDirectories.contains(dir))
               .toList();
 
+      // Сохраняем обновленный список в файл
+      await file.writeAsString(jsonEncode(updatedDirectories));
+
+      // Обновляем состояние
       setState(() {
         directories = updatedDirectories;
       });
-    } else {
-      // Если сервер не смог обработать запрос
-      print('Failed to clear selected directories');
+
+      print('Selected directories cleared successfully');
+    } catch (e) {
+      print('Failed to clear selected directories: $e');
     }
   }
 

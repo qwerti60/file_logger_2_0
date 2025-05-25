@@ -158,62 +158,63 @@ val notification = NotificationCompat.Builder(this, "file_watcher_channel")
 
 startForeground(1, notification)
 }
-
 fun toggleTracking() {
-if (fileObserver == null) {
-fetchDirectoriesAndStartWatching()
-CoroutineScope(Dispatchers.IO).launch {
-scheduleFileSending(applicationContext)
+    if (fileObserver == null) {
+        // Сразу вызывает метод для настройки наблюдений
+        fetchDirectoriesAndStartWatching(applicationContext)
+        
+        // Стартует корутину для фоновых операций
+        CoroutineScope(Dispatchers.IO).launch {
+            scheduleFileSending(applicationContext)
+        }
+    }
+    toggleFileObserver()
 }
-}
-toggleFileObserver()
-}
-class MyUtils {
-    companion object {
-        @JvmStatic
-        val DIRECTORY_LIST_TYPE = object : TypeToken<List<Directory>>() {}.type
+
+// Новый класс Directory заменяется простым списком строк
+fun fetchDirectoriesAndStartWatching(context: Context) {
+    try {
+        // Читаем файл из внутреннего хранилища
+        val jsonFileString = readFromInternalStorage()
+        
+        if (jsonFileString.isNullOrEmpty()) {
+            throw IllegalArgumentException("No valid directories.json file found!")
+        }
+
+        println("JSON content: $jsonFileString")
+
+        // Преобразование JSON-массива строк в обычный List<String>
+        val directories: List<String> = Gson().fromJson(jsonFileString, object : TypeToken<List<String>>(){}.type)
+
+        // Проверяем каждую директорию на существование
+        val existingDirectories = directories.filter { dir ->
+            File(dir).exists()
+        }
+
+        println("Existing directory paths: $existingDirectories")
+
+        // Передаем только существующие директории дальше
+        initializeFileObservers(existingDirectories)
+
+    } catch (e: Exception) {
+        println("Error reading directories: ${e.message}")
+        e.printStackTrace()
     }
 }
-data class Directory(val id: String, val directory_path: String)
+// Функция для чтения файла из внутреннего хранилища
+private fun readFromInternalStorage(): String? {
+    val context = applicationContext
+    val appDir = context.getFilesDir()?.parentFile?.absolutePath ?: return null
+    val filePath = "$appDir/app_flutter/directories.json"
+    val file = File(filePath)
 
-fun fetchDirectoriesAndStartWatching() {
-    val client = OkHttpClient()
-    val request = Request.Builder()
-        .url("https://ivnovav.ru/logger_api/get_directory.php")
-        .build()
+    if (!file.exists()) {
+        Log.w("FileReader", "File not found: $filePath")
+        return null
+    }
 
-    client.newCall(request).enqueue(object : okhttp3.Callback {
-        override fun onFailure(call: okhttp3.Call, e: IOException) {
-            e.printStackTrace()
-        }
-
-        override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
-            response.use {
- if (!it.isSuccessful) throw IOException("Unexpected code ${response.code}")
-        
-        val responseBody = it.body!!.string()
-        println("Response from server: $responseBody")
-
-        // Использовать готовый TYPE из MyUtils
-        val directories: List<Directory> = Gson().fromJson(responseBody, MyUtils.DIRECTORY_LIST_TYPE)
-
-
-                // Проверяем каждую директорию на существование
-                val existingDirectories = directories.filter { dir ->
-                    File(dir.directory_path).exists()
-                }.map { dir ->
-                    dir.directory_path.replace("\\", "") // Очистка пути от слэшей
-                }
-
-                println("Existing directory paths: $existingDirectories")
-
-                // Передаем только существующие директории дальше
-                initializeFileObservers(existingDirectories)
-            }
-        }
-    })
+    return file.readText(Charsets.UTF_8)
 }
-
 
 // Переменная для хранения временных меток последних событий по каждому пути
 private val lastEventsByPath = mutableMapOf<Path, LocalDateTime>()
@@ -268,6 +269,8 @@ var lastEventsByPath = ConcurrentHashMap<String, LocalDateTime>()
 
 // Набор зарегистрированных видеофайлов
 val registeredVideos = HashSet<String>()
+var lastOpenTime = System.currentTimeMillis()
+val recentlyOpenedFiles = mutableSetOf<String>()
 
     private val videoExtensions = setOf("mp4", "mov", "avi", "mkv", "wmv", "flv", "webm", "m4v", "mpeg", "mpg", "3gp")
     private val documentAndImageExtensions = setOf(
@@ -296,6 +299,14 @@ override fun onEvent(event: Int, path: String?) {
                 println("Skipped small file: $fullPath")
                 return
             }
+            val now = System.currentTimeMillis()
+            if ((now - lastOpenTime) < 2000L) {
+                println("Skipped too-frequent event: $fullPath")
+                return
+            }
+            
+            lastOpenTime = now
+
 
             // Получаем абсолютный путь
             val absolutePath = fullPath.absolutePath
@@ -309,8 +320,19 @@ override fun onEvent(event: Int, path: String?) {
                 return
             }
 
-// Особый случай для видеофайлов
-if (videoExtensions.contains(ext)) {
+            // Логика обработки файлов
+            when {
+                videoExtensions.contains(ext) -> handleVideoFile(fullPath)
+                documentAndImageExtensions.contains(ext) -> handleDocumentOrImageFile(fullPath)
+                else -> println("Unknown file type skipped: $absolutePath")
+            }
+        }
+    }
+}
+
+private fun handleVideoFile(file: File) {
+    val absolutePath = file.absolutePath
+    
     // Если видео уже зарегистрировано, пропускаем событие
     if (registeredVideos.contains(absolutePath)) {
         println("Skipped duplicate video log: $absolutePath")
@@ -322,28 +344,30 @@ if (videoExtensions.contains(ext)) {
     // Добавляем запись и помечаем её как зарегистрированную
     println("Adding video to CSV: $absolutePath")
     synchronized(this) {
-        addCsvRecord(fullPath)
+        addCsvRecord(file)
     }
     // Очищаем предыдущие регистрации и добавляем текущее видео
     registeredVideos.clear()
     registeredVideos.add(absolutePath)
-} else {
-if (documentAndImageExtensions.contains(ext)) {
+}
+
+private fun handleDocumentOrImageFile(file: File) {
+    val absolutePath = file.absolutePath
     val previousEventTime = lastEventsByPath[absolutePath]
     val currentTime = LocalDateTime.now()
     
     // Счетчик событий в короткий промежуток времени
-    var recentEventsCount = recentEventsCounter.get() // Use get() instead of getOrDefault
+    var recentEventsCount = recentEventsCounter.get() // Используем get() вместо getOrDefault
     
     if (previousEventTime != null) {
         val interval = Duration.between(previousEventTime, currentTime)
         
         // Увеличенный интервал для игнорирования частых событий (например, 1 секунда)
-        if (interval.toMillis() < 1000) { 
+        if (interval.toMillis() < 2000) { 
             recentEventsCount++
             recentEventsCounter.set(recentEventsCount)
             
-            // Если много событий за короткий промежуток - вероятно это скроллинг или смена директории
+            // Если много событий за короткий промежуток — вероятно это скроллинг или смена директории
             if (recentEventsCount > 5) {
                 println("Skipping bulk changes: $absolutePath")
                 return
@@ -360,14 +384,21 @@ if (documentAndImageExtensions.contains(ext)) {
     // Обновляем время последнего события
     lastEventsByPath[absolutePath] = currentTime
     
+    // Подтверждаем успешное чтение файла перед добавлением в CSV
+    try {
+        BufferedReader(FileReader(file)).use { reader ->
+            reader.readLine() // Пробуем прочитать первую строку
+            println("Successfully read first line from: $file")
+        }
+    } catch (ex: IOException) {
+        println("Failed to open file for reading: ${file.absolutePath}")
+        return
+    }
+
     // Добавляем запись
     println("Adding non-video file to CSV: $absolutePath")
     synchronized(this) {
-        addCsvRecord(fullPath)
-    }
-}    // Очищаем все регистрации видеофайлов после обработки других файлов
-    registeredVideos.clear()
-}        }
+        addCsvRecord(file)
     }
 }
 fun addCsvRecord(fullPath: File) {
