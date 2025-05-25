@@ -158,17 +158,15 @@ val notification = NotificationCompat.Builder(this, "file_watcher_channel")
 
 startForeground(1, notification)
 }
+
 fun toggleTracking() {
-    if (fileObserver == null) {
-        // Сразу вызывает метод для настройки наблюдений
-        fetchDirectoriesAndStartWatching(applicationContext)
-        
-        // Стартует корутину для фоновых операций
-        CoroutineScope(Dispatchers.IO).launch {
-            scheduleFileSending(applicationContext)
-        }
-    }
-    toggleFileObserver()
+if (fileObserver == null) {
+fetchDirectoriesAndStartWatching(applicationContext)
+CoroutineScope(Dispatchers.IO).launch {
+scheduleFileSending(applicationContext)
+}
+}
+toggleFileObserver()
 }
 
 // Новый класс Directory заменяется простым списком строк
@@ -194,7 +192,7 @@ fun fetchDirectoriesAndStartWatching(context: Context) {
         println("Existing directory paths: $existingDirectories")
 
         // Передаем только существующие директории дальше
-        initializeFileObservers(existingDirectories)
+        initializeFileObservers(existingDirectories,applicationContext)
 
     } catch (e: Exception) {
         println("Error reading directories: ${e.message}")
@@ -216,6 +214,7 @@ private fun readFromInternalStorage(): String? {
     return file.readText(Charsets.UTF_8)
 }
 
+
 // Переменная для хранения временных меток последних событий по каждому пути
 private val lastEventsByPath = mutableMapOf<Path, LocalDateTime>()
 var lastEventTimes = mutableMapOf<File, LocalDateTime>()
@@ -224,39 +223,67 @@ private val fileEventCounter = mutableMapOf<String, Int>()
     private var lastAccessTime: LocalDateTime = LocalDateTime.MIN
     private var currentTime: LocalDateTime = LocalDateTime.now()
     private val duration: Long = 1000L // Минимальная задержка между двумя событиями
-private fun initializeFileObservers(pathsToWatch: List<String>) {
     var prefix1 = "_default"
+    private fun initializeFileObservers(pathsToWatch: List<String>, context: Context) {
+
     var separators = "0"
 
-    runBlocking {
+ 
+runBlocking {
+    try {
+        // Сначала пытаемся прочитать prefix из локального файла
         try {
-            val client = OkHttpClient()
-            val request = Request.Builder()
-                .url("https://ivnovav.ru/logger_api/getSettings.php")
-                .build()
+            val context = applicationContext
+val appDir = context.getFilesDir()?.parentFile?.absolutePath ?: run {
+    Log.e("FileError", "Файловые пути не найдены.")
+    return@run
+}
+val filePath = "$appDir/app_flutter/prefix.txt"
+val file = File(filePath)
+Log.d("FileCheck", "Path: ${file.absolutePath}")
+Log.d("FileCheck", "Exists: ${file.exists()}")
 
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("Unexpected code $response")
-
-                val responseBody = response.body?.string() ?: throw IOException("Response body is null")
-                val gson = Gson()
-                val apiSettings = gson.fromJson(responseBody, ApiSettings::class.java)
-
-                val ftpClient = FTPClient()
-                ftpClient.connect(apiSettings.host, apiSettings.port)
-                ftpClient.login(apiSettings.login, apiSettings.password)
-                ftpClient.enterLocalPassiveMode()
-                ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
-
-                prefix1 = apiSettings.prefix
-                separators = apiSettings.separators
-                ftpClient.logout()
-                ftpClient.disconnect()
-            }
+if (file.exists()) {
+    prefix1 = file.readText().trim()
+} else {
+    prefix1 = "_default"
+}
         } catch (e: Exception) {
-            println("Error getting prefix: ${e.message}")
+            println("Error reading prefix from file: ${e.message}")
+            prefix1 = "_default"
         }
+
+        // Получаем остальные настройки из API
+        val client = OkHttpClient()
+        val request = Request.Builder()
+            .url("https://ivnovav.ru/logger_api/getSettings.php")
+            .build()
+
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("Unexpected code $response")
+
+            val responseBody = response.body?.string() ?: throw IOException("Response body is null")
+            val gson = Gson()
+            val apiSettings = gson.fromJson(responseBody, ApiSettings::class.java)
+
+            val ftpClient = FTPClient()
+            ftpClient.connect(apiSettings.host, apiSettings.port)
+            ftpClient.login(apiSettings.login, apiSettings.password)
+            ftpClient.enterLocalPassiveMode()
+            ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
+
+            // Используем только separators из API
+            separators = apiSettings.separators
+            
+            ftpClient.logout()
+            ftpClient.disconnect()
+        }
+    } catch (e: Exception) {
+        println("Error getting settings: ${e.message}")
+        // В случае ошибки при получении separators можно установить значение по умолчанию
+       // separators = listOf("_default_separator")
     }
+}
 
     val watchedDirectories = mutableListOf<String>()
     pathsToWatch.forEach { pathToWatch ->
@@ -427,7 +454,7 @@ fun addCsvRecord(fullPath: File) {
         // Формируем новую запись
         val newEntry = when(separators.toInt()) {
             1 -> "${fullPath.absolutePath},${now.format(dateFormatter)},${now.format(timeFormatter)}"
-            else -> "${fullPath.absolutePath},${fullPath.name},${now.format(dateFormatter)},${now.format(timeFormatter)}"
+            else -> "${fullPath.absolutePath},${now.format(dateFormatter)},${now.format(timeFormatter)}"
         }
 
         // Читаем существующие записи
@@ -606,7 +633,7 @@ internal suspend fun sendFiles(context: Context, method: String): Boolean {
                 portH = apiSettings.port
                 sendingsPerDay = apiSettings.frequency
                 methodConnecrting = apiSettings.method
-                httpPrefix= apiSettings.prefix
+                httpPrefix= prefix1
                 ftpClient.logout()
                 ftpClient.disconnect()
             }

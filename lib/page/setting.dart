@@ -6,6 +6,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:ftpconnect/ftpconnect.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
 
 class SettingPage extends StatefulWidget {
   const SettingPage({super.key});
@@ -132,27 +133,39 @@ class _SettingPageState extends State<SettingPage> {
     getSettings();
   }
 
-  Future _sendData() async {
-    var response = await http.post(
-      Uri.parse('https://ivnovav.ru/logger_api/saveSettings.php'),
-      body: {
-        'prefix': _prefixController.text,
-        'login': _loginController.text,
-        'password': _passwordController1.text,
-        'httpurl': _httpurlController.text,
-        'host': _hostController.text,
-        //'httpurl': _httpurlController.text,
-        'port': _portController.text,
-        'frequency': _sendingFrequencyController.text,
-        'method': _chosenValue,
-        'separators': _switchValue ? '1' : '0',
-      },
-    );
-    if (response.statusCode == 200) {
-      if (response.body.isEmpty) {
-        throw Exception('Пустой ответ от сервера');
-      }
-      try {
+  Future<void> _sendData() async {
+    // Сначала сохраняем prefix локально
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/prefix.txt');
+      print(file);
+      await file.writeAsString(_prefixController.text);
+    } catch (e) {
+      print('Ошибка при сохранении prefix локально: $e');
+    }
+
+    // Отправляем данные на сервер
+    try {
+      var response = await http.post(
+        Uri.parse('https://ivnovav.ru/logger_api/saveSettings.php'),
+        body: {
+          'prefix': '',
+          'login': _loginController.text,
+          'password': _passwordController1.text,
+          'httpurl': _httpurlController.text,
+          'host': _hostController.text,
+          'port': _portController.text,
+          'frequency': _sendingFrequencyController.text,
+          'method': _chosenValue,
+          'separators': _switchValue ? '1' : '0',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        if (response.body.isEmpty) {
+          throw Exception('Пустой ответ от сервера');
+        }
+
         final parsed = json.decode(response.body);
         showDialog(
           context: context,
@@ -170,44 +183,68 @@ class _SettingPageState extends State<SettingPage> {
                 ],
               ),
         );
-      } catch (e) {
-        print('Ошибка декодирования: $e');
-        print('Ответ сервера: ${response.body}');
-        throw Exception('Ошибка формата ответа');
+      } else {
+        throw Exception('Failed to load ads');
       }
-      // Это излишне, поскольку возвращение происходит в блоке try выше
-      // return json.decode(response.body);
-    } else {
-      throw Exception('Failed to load ads');
+    } catch (e) {
+      print('Ошибка при отправке данных: $e');
+      showDialog(
+        context: context,
+        builder:
+            (ctx) => AlertDialog(
+              title: Text('Ошибка'),
+              content: Text(e.toString()),
+              actions: [
+                TextButton(
+                  child: Text('ОК'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                  },
+                ),
+              ],
+            ),
+      );
     }
   }
-  //  TextEditingController _prefixController = TextEditingController();
+
+  // Добавьте метод для чтения prefix при запуске приложения
+  Future<String> loadPrefix() async {
+    try {
+      final directory = await getApplicationDocumentsDirectory();
+      final file = File('${directory.path}/prefix.txt');
+      if (await file.exists()) {
+        String prefix = await file.readAsString();
+        //_prefixController.text = prefix; // Установка значения в контроллер
+        return prefix;
+      }
+    } catch (e) {
+      print('Ошибка при чтении prefix: $e');
+    }
+    return '_default'; // Возвращаем пустую строку, если не удалось прочитать файл
+  } //  TextEditingController _prefixController = TextEditingController();
 
   // Добавьте контроллеры для всех полей
 
   void getSettings() async {
-    var url =
-        'http://ivnovav.ru/logger_api/getSettings.php'; // Замените на URL вашего PHP скрипта
+    var url = 'http://ivnovav.ru/logger_api/getSettings.php';
     var response = await http.get(Uri.parse(url));
 
     if (response.statusCode == 200) {
       var data = json.decode(response.body);
+
+      // Получаем prefix из loadPrefix()
+      String prefix = await loadPrefix();
+
       setState(() {
-        // Используйте операторы ?. и ?? для установки значений по умолчанию, если данные отсутствуют
-        _prefixController.text = data['prefix'] ?? '';
+        _prefixController.text = prefix; // Используем полученный prefix
         _loginController.text = data['login'] ?? '';
         _passwordController1.text = data['password'] ?? '';
         _hostController.text = data['host'] ?? '';
         _httpurlController.text = data['httpurl'] ?? '';
         _sendingFrequencyController.text = data['frequency']?.toString() ?? '';
         _portController.text = data['port']?.toString() ?? '';
-        _chosenValue =
-            data['method']; // Установите осмысленное значение по умолчанию, если 'method' отсутствует
+        _chosenValue = data['method'];
         _switchValue = data['separators'] == 1 ? true : false;
-        //_switchValue
-        //       'separators': _switchValue ? '1' : '0',
-
-        // Замечание: Убедитесь, что значения по умолчанию соответствуют ожиданиям вашего интерфейса.
       });
     } else {
       print('Failed to load settings');
