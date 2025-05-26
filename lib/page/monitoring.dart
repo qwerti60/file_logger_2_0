@@ -112,35 +112,38 @@ class _MonitoringPageState extends State<MonitoringPage> {
   Future<void> _pickDirectory() async {
     final result = await FilePicker.platform.getDirectoryPath();
 
-    if (result != null && !directories.contains(result)) {
-      setState(() {
-        directories.add(result);
-      });
-
-      try {
-        final subDirectories = await _listAllSubdirectories(result);
-        for (var dir in subDirectories) {
-          setState(() {
-            directories.add(dir);
-          });
-        }
-
-        // Сохраняем директории в локальный файл
-        await _saveDirectories();
-
-        print("Все директории успешно добавлены!");
-        print(directories);
-
-        // Ждём, пока дерево виджетов обновится, и только после этого производим скроллинг
-        SchedulerBinding.instance.addPostFrameCallback((_) {
-          _scrollController.animateTo(
-            _scrollController.position.maxScrollExtent,
-            duration: Duration(milliseconds: 300),
-            curve: Curves.easeInOut,
-          );
+    if (result != null) {
+      // Добавляем основную директорию, если её ещё нет
+      if (!directories.contains(result)) {
+        setState(() {
+          directories.add(result);
         });
-      } catch (e) {
-        print(e.toString());
+
+        try {
+          final subDirectories = await _listAllSubdirectories(result);
+          setState(() {
+            // Используем Set для удаления дубликатов
+            final uniqueDirectories = {...directories, ...subDirectories};
+            directories = uniqueDirectories.toList();
+          });
+
+          // Сохраняем директории в локальный файл
+          await _saveDirectories();
+
+          print("Все директории успешно добавлены!");
+          print(directories);
+
+          // Ждём, пока дерево виджетов обновится, и только после этого производим скроллинг
+          SchedulerBinding.instance.addPostFrameCallback((_) {
+            _scrollController.animateTo(
+              _scrollController.position.maxScrollExtent,
+              duration: Duration(milliseconds: 300),
+              curve: Curves.easeInOut,
+            );
+          });
+        } catch (e) {
+          print(e.toString());
+        }
       }
     }
   }
@@ -205,75 +208,81 @@ class _MonitoringPageState extends State<MonitoringPage> {
       final Directory appDir = await getApplicationDocumentsDirectory();
       final String appPath = appDir.path;
 
-      // Получаем список всех файлов и директорий
+      // Получаем список всех файлов и директорий рекурсивно
       final Directory directory = Directory(appPath);
       List<FileSystemEntity> entities =
           await directory.list(recursive: true).toList();
 
-      // Фильтруем только директории
-      List<String> newDirectories =
-          entities
-              .where((entity) => entity is Directory)
-              .map((entity) => entity.path)
-              .toList();
+      // Создаем Set для хранения уникальных путей
+      Set<String> uniquePaths = {};
 
-      // Преобразуем пути в относительные (относительно корневой директории приложения)
-      newDirectories =
-          newDirectories.map((path) {
-            return path.replaceFirst(appPath, '');
-          }).toList();
+      // Обрабатываем каждую директорию
+      for (var entity in entities) {
+        if (entity is Directory) {
+          String path = entity.path;
 
-      // Удаляем пустые пути и корневую директорию
-      newDirectories = newDirectories.where((path) => path.isNotEmpty).toList();
+          // Нормализуем путь
+          path = path.replaceAll(
+            RegExp(r'/{2,}'),
+            '/',
+          ); // Удаляем двойные слеши
+          path = path.replaceAll(
+            RegExp(r'\\'),
+            '/',
+          ); // Заменяем обратные слеши на прямые
 
-      // Удаляем дубликаты
-      newDirectories = newDirectories.toSet().toList();
+          if (path.startsWith(appPath)) {
+            String relativePath = path.substring(appPath.length);
+            // Удаляем начальный слеш если есть
+            if (relativePath.startsWith('/')) {
+              relativePath = relativePath.substring(1);
+            }
+            // Удаляем конечный слеш если есть
+            if (relativePath.endsWith('/')) {
+              relativePath = relativePath.substring(0, relativePath.length - 1);
+            }
+
+            // Пропускаем пустые пути
+            if (relativePath.isNotEmpty) {
+              uniquePaths.add(relativePath);
+            }
+          }
+        }
+      }
+
+      // Преобразуем Set обратно в List
+      List<String> uniqueDirectories = uniquePaths.toList()..sort();
 
       // Фильтруем и сохраняем только существующие каталоги
       List<String> existingDirectories = await filterExistingDirectories(
-        newDirectories,
+        uniqueDirectories,
       );
 
       setState(() {
         directories = existingDirectories;
       });
 
-      // Выполняем автоматический скроллинг после обновления списка директорий
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
-      });
+      // Для отладки
+      print('Найденные директории:');
+      for (var dir in directories) {
+        print(dir);
+      }
     } catch (e) {
-      print("Ошибка при получении директорий: $e");
-      setState(() {
-        directories = [];
-      });
+      print('Ошибка при получении директорий: $e');
     }
   }
 
-  Future<List<String>> filterExistingDirectories(
-    List<String> directoriesToCheck,
-  ) async {
-    final fs = const LocalFileSystem();
-    final appDocsDir = await getApplicationDocumentsDirectory();
+  Future<List<String>> filterExistingDirectories(List<String> paths) async {
+    List<String> existingPaths = [];
 
-    // Параллельно проверяем каждую директорию
-    List<String?> checkedDirs = await Future.wait(
-      directoriesToCheck.map((dir) async {
-        final fullPath = p.join(appDocsDir.path, dir);
-        final fileEntity = fs.directory(fullPath);
+    for (String path in paths) {
+      final dir = Directory(path);
+      if (await dir.exists()) {
+        existingPaths.add(path);
+      }
+    }
 
-        if (await fileEntity.exists()) {
-          return dir;
-        } else {
-          return null;
-        }
-      }),
-    );
-
-    // Убираем null и формируем финальный список
-    return checkedDirs.where((dir) => dir != null).map((dir) => dir!).toList();
+    return existingPaths;
   }
 
   Future<void> clearSelectedDirectories(
@@ -299,6 +308,11 @@ class _MonitoringPageState extends State<MonitoringPage> {
       });
 
       print('Selected directories cleared successfully');
+
+      // Проверяем состояние отслеживания перед отправкой файлов
+      if (_trackingEnabled) {
+        toggleTracking(); // Переключаем состояние сервиса
+      }
     } catch (e) {
       print('Failed to clear selected directories: $e');
     }
@@ -394,7 +408,7 @@ class _MonitoringPageState extends State<MonitoringPage> {
                                 return AlertDialog(
                                   title: Text("Подтверждение удаления"),
                                   content: Text(
-                                    "Вы уверены, что хотите очистить все директории?",
+                                    "Вы уверены, что хотите очистить все директории? Сервис будет выключен!",
                                   ),
                                   actions: [
                                     TextButton(

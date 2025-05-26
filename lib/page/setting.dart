@@ -25,20 +25,59 @@ class _SettingPageState extends State<SettingPage> {
 
   // Функция для вызова нативного метода
   Future<void> _sendFiles() async {
+    // Создаем локальную ссылку на диалог (будем использовать её позже)
+    late BuildContext dialogContext;
+
+    // Показываем индикатор загрузки
+    showDialog(
+      context: context,
+      barrierDismissible: false, // блокируем закрытие внешним кликом
+      useRootNavigator: true, // важно, чтобы использовали главный navigator
+      builder: (ctx) {
+        // сохраняем ссылку на контекст индикатора
+        dialogContext = ctx;
+        return Center(
+          child: Container(
+            padding: const EdgeInsets.all(16.0),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(8.0),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16.0),
+                const Text('Отправка файлов...'),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
     try {
-      // Вызываем нативный метод sendFiles
+      // Отправляем файлы
       final result = await platform.invokeMethod('sendFiles');
+
+      // Важно: очищаем глобальное состояние
+      Navigator.of(
+        dialogContext,
+      ).pop(); // закрываем индикатор прямо из контекста
+
+      // Ждём полсекунды, чтобы убедиться, что индикатор исчез
+      await Future.delayed(const Duration(milliseconds: 300));
 
       // Показываем успешное сообщение
       await showDialog(
         context: context,
-        builder: (BuildContext context) {
+        builder: (context) {
           return AlertDialog(
-            title: Text('Успех'),
-            content: Text('Файлы успешно отправлены'),
+            title: const Text('Успех'),
+            content: const Text('Файлы успешно отправлены'),
             actions: <Widget>[
               TextButton(
-                child: Text('OK'),
+                child: const Text('OK'),
                 onPressed: () {
                   Navigator.of(context).pop();
                 },
@@ -48,16 +87,22 @@ class _SettingPageState extends State<SettingPage> {
         },
       );
     } on PlatformException catch (e) {
+      // Закрываем индикатор из контекста
+      Navigator.of(dialogContext).pop();
+
+      // Ждём, чтобы убедиться, что индикатор исчез
+      await Future.delayed(const Duration(milliseconds: 300));
+
       // Показываем сообщение об ошибке
       await showDialog(
         context: context,
-        builder: (BuildContext context) {
+        builder: (context) {
           return AlertDialog(
-            title: Text('Ошибка'),
-            content: Text('${e.message}'),
+            title: const Text('Ошибка'),
+            content: Text(e.message ?? 'Неизвестная ошибка'),
             actions: <Widget>[
               TextButton(
-                child: Text('OK'),
+                child: const Text('OK'),
                 onPressed: () {
                   Navigator.of(context).pop();
                 },

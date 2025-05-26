@@ -309,52 +309,65 @@ override fun onEvent(event: Int, path: String?) {
     if (path != null) {
         val fullPath = File(pathToWatch, path)
         
-        if (event == FileObserver.OPEN && fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
-            
-            // Проверка читаемости файла и размера
-            if (!fullPath.canRead() || fullPath.length() == 0L) {
-                println("Skipped unreadable or empty file: $fullPath")
-                return
-            }
+var lastDirectoryAccessTime = 0L
+var lastOpenTime = 0L
 
-            // Проверка временного имени и малого размера файла
-            if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) {
-                println("Skipped temporary file: $fullPath")
-                return
-            }
-            if (fullPath.length() < 1024L) {
-                println("Skipped small file: $fullPath")
-                return
-            }
-            val now = System.currentTimeMillis()
-            if ((now - lastOpenTime) < 2000L) {
-                println("Skipped too-frequent event: $fullPath")
-                return
-            }
-            
-            lastOpenTime = now
-
-
-            // Получаем абсолютный путь
-            val absolutePath = fullPath.absolutePath
-
-            // Проверка расширения файла
-            val ext = fullPath.extension.lowercase()
-
-            // Исключаем APK-файлы
-            if (ext == "apk") {
-                println("Skipped APK file: $fullPath")
-                return
-            }
-
-            // Логика обработки файлов
-            when {
-                videoExtensions.contains(ext) -> handleVideoFile(fullPath)
-                documentAndImageExtensions.contains(ext) -> handleDocumentOrImageFile(fullPath)
-                else -> println("Unknown file type skipped: $absolutePath")
-            }
-        }
+if (event == FileObserver.OPEN && fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
+    
+    val now = System.currentTimeMillis()
+    
+    // Проверяем, не было ли недавнего входа в директорию
+    if ((now - lastDirectoryAccessTime) < 2000L) {
+        println("Skipped due to recent directory access: $fullPath")
+        return
     }
+
+    // Проверка читаемости файла и размера
+    if (!fullPath.canRead() || fullPath.length() == 0L) {
+        println("Skipped unreadable or empty file: $fullPath")
+        return
+    }
+
+    // Проверка временного имени и малого размера файла
+    if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) {
+        println("Skipped temporary file: $fullPath")
+        return
+    }
+    if (fullPath.length() < 1024L) {
+        println("Skipped small file: $fullPath")
+        return
+    }
+    
+    if ((now - lastOpenTime) < 3000L) {
+        println("Skipped too-frequent event: $fullPath")
+        return
+    }
+    
+    lastOpenTime = now
+
+    // Получаем абсолютный путь
+    val absolutePath = fullPath.absolutePath
+
+    // Проверка расширения файла
+    val ext = fullPath.extension.lowercase()
+
+    // Исключаем APK-файлы
+    if (ext == "apk") {
+        println("Skipped APK file: $fullPath")
+        return
+    }
+
+    // Логика обработки файлов
+    when {
+        videoExtensions.contains(ext) -> handleVideoFile(fullPath)
+        documentAndImageExtensions.contains(ext) -> handleDocumentOrImageFile(fullPath)
+        else -> println("Unknown file type skipped: $absolutePath")
+    }
+} else if (event == FileObserver.ACCESS && fullPath.isDirectory) {
+    // Обновляем время последнего доступа к директории
+    lastDirectoryAccessTime = System.currentTimeMillis()
+    println("Directory accessed: $fullPath")
+}    }
 }
 
 private fun handleVideoFile(file: File) {
