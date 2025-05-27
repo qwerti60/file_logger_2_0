@@ -135,11 +135,11 @@ class _MonitoringPageState extends State<MonitoringPage> {
 
           // Ждём, пока дерево виджетов обновится, и только после этого производим скроллинг
           SchedulerBinding.instance.addPostFrameCallback((_) {
-            _scrollController.animateTo(
-              _scrollController.position.maxScrollExtent,
-              duration: Duration(milliseconds: 300),
-              curve: Curves.easeInOut,
-            );
+            if (_scrollController.hasClients) {
+              _scrollController.jumpTo(
+                _scrollController.position.maxScrollExtent,
+              );
+            }
           });
         } catch (e) {
           print(e.toString());
@@ -175,11 +175,19 @@ class _MonitoringPageState extends State<MonitoringPage> {
           directories = decodedDirectories.cast<String>().toList();
         });
       }
-      SchedulerBinding.instance.addPostFrameCallback((_) {
-        if (_scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
-      });
+
+      // Добавляем небольшую задержку
+      await Future.delayed(Duration(milliseconds: 2000));
+
+      if (mounted) {
+        Future.microtask(() {
+          if (_scrollController.hasClients) {
+            _scrollController.jumpTo(
+              _scrollController.position.maxScrollExtent,
+            );
+          }
+        });
+      }
     } catch (e) {
       print('Ошибка при загрузке директорий: $e');
     }

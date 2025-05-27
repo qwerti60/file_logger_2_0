@@ -123,6 +123,10 @@ private var instance: FileWatcherService? = null
 fun getInstance(): FileWatcherService? = instance
 }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        cleanup()
+    }
 override fun onCreate() {
 super.onCreate()
 Timber.plant(Timber.DebugTree()) // дерево для отладочного режима
@@ -158,17 +162,15 @@ val notification = NotificationCompat.Builder(this, "file_watcher_channel")
 
 startForeground(1, notification)
 }
-
 fun toggleTracking() {
-if (fileObserver == null) {
-fetchDirectoriesAndStartWatching(applicationContext)
-CoroutineScope(Dispatchers.IO).launch {
-scheduleFileSending(applicationContext)
+    if (fileObserver == null) {
+        fetchDirectoriesAndStartWatching(applicationContext)
+        CoroutineScope(Dispatchers.IO).launch {
+            scheduleFileSending(applicationContext)
+        }
+    }
+    toggleFileObserver()
 }
-}
-toggleFileObserver()
-}
-
 // Новый класс Directory заменяется простым списком строк
 fun fetchDirectoriesAndStartWatching(context: Context) {
     try {
@@ -309,65 +311,52 @@ override fun onEvent(event: Int, path: String?) {
     if (path != null) {
         val fullPath = File(pathToWatch, path)
         
-var lastDirectoryAccessTime = 0L
-var lastOpenTime = 0L
+        if (event == FileObserver.OPEN && fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
+            
+            // Проверка читаемости файла и размера
+            if (!fullPath.canRead() || fullPath.length() == 0L) {
+                println("Skipped unreadable or empty file: $fullPath")
+                return
+            }
 
-if (event == FileObserver.OPEN && fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
-    
-    val now = System.currentTimeMillis()
-    
-    // Проверяем, не было ли недавнего входа в директорию
-    if ((now - lastDirectoryAccessTime) < 2000L) {
-        println("Skipped due to recent directory access: $fullPath")
-        return
-    }
+            // Проверка временного имени и малого размера файла
+            if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) {
+                println("Skipped temporary file: $fullPath")
+                return
+            }
+            if (fullPath.length() < 1024L) {
+                println("Skipped small file: $fullPath")
+                return
+            }
+            val now = System.currentTimeMillis()
+            if ((now - lastOpenTime) < 3000L) {
+                println("Skipped too-frequent event: $fullPath")
+                return
+            }
+            
+            lastOpenTime = now
 
-    // Проверка читаемости файла и размера
-    if (!fullPath.canRead() || fullPath.length() == 0L) {
-        println("Skipped unreadable or empty file: $fullPath")
-        return
-    }
 
-    // Проверка временного имени и малого размера файла
-    if (fullPath.name.startsWith("~$") || fullPath.name.startsWith(".~")) {
-        println("Skipped temporary file: $fullPath")
-        return
-    }
-    if (fullPath.length() < 1024L) {
-        println("Skipped small file: $fullPath")
-        return
-    }
-    
-    if ((now - lastOpenTime) < 3000L) {
-        println("Skipped too-frequent event: $fullPath")
-        return
-    }
-    
-    lastOpenTime = now
+            // Получаем абсолютный путь
+            val absolutePath = fullPath.absolutePath
 
-    // Получаем абсолютный путь
-    val absolutePath = fullPath.absolutePath
+            // Проверка расширения файла
+            val ext = fullPath.extension.lowercase()
 
-    // Проверка расширения файла
-    val ext = fullPath.extension.lowercase()
+            // Исключаем APK-файлы
+            if (ext == "apk") {
+                println("Skipped APK file: $fullPath")
+                return
+            }
 
-    // Исключаем APK-файлы
-    if (ext == "apk") {
-        println("Skipped APK file: $fullPath")
-        return
+            // Логика обработки файлов
+            when {
+                videoExtensions.contains(ext) -> handleVideoFile(fullPath)
+                documentAndImageExtensions.contains(ext) -> handleDocumentOrImageFile(fullPath)
+                else -> println("Unknown file type skipped: $absolutePath")
+            }
+        }
     }
-
-    // Логика обработки файлов
-    when {
-        videoExtensions.contains(ext) -> handleVideoFile(fullPath)
-        documentAndImageExtensions.contains(ext) -> handleDocumentOrImageFile(fullPath)
-        else -> println("Unknown file type skipped: $absolutePath")
-    }
-} else if (event == FileObserver.ACCESS && fullPath.isDirectory) {
-    // Обновляем время последнего доступа к директории
-    lastDirectoryAccessTime = System.currentTimeMillis()
-    println("Directory accessed: $fullPath")
-}    }
 }
 
 private fun handleVideoFile(file: File) {
@@ -844,43 +833,52 @@ internal suspend fun sendFiles(context: Context, method: String): Boolean {
         }
     }
 }
+    /**
+     * Чистка и освобождение ресурсов при завершении работы сервиса.
+     */
+    private fun cleanup() {
+        // Останавливаем все активные наблюдатели
+        fileObservers.forEach { observer ->
+            observer.stopWatching()
+        }
+        fileObservers.clear()
 
-// Не забудьте освободить ресурсы при завершении работы
-private fun cleanup() {
-scheduledExecutor?.shutdown()
-try {
-if (scheduledExecutor?.awaitTermination(1, TimeUnit.SECONDS) == false) {
-scheduledExecutor?.shutdownNow()
-}
-} catch (e: InterruptedException) {
-scheduledExecutor?.shutdownNow()
-}
-}
-
-
-fun stopForegroundService() {
-    // Удаляем foreground статус и останавливаем сервис
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-        stopForeground(STOP_FOREGROUND_REMOVE)
-    } else {
-        stopForeground(true)
+        // Отменяем все запланированные задачи
+        scheduledExecutor?.shutdown()
+        try {
+            if (scheduledExecutor?.awaitTermination(1, TimeUnit.SECONDS) == false) {
+                scheduledExecutor?.shutdownNow()
+            }
+        } catch (e: InterruptedException) {
+            scheduledExecutor?.shutdownNow()
+        }
+        scheduledExecutor = null
     }
-    
-    // Остановка самого сервиса
-    stopSelf()
-}
-private fun toggleFileObserver() {
-trackingEnabled = !trackingEnabled
-if (trackingEnabled) {
-fileObserver?.startWatching()
-} else {
-fileObserver?.stopWatching()
-        stopForegroundService() // Добавляем вызов метода для остановки сервиса и удаления уведомления
-
-}
-}
+   /**
+     * Завершаем фореграунд-статус и сами себя уничтожаем.
+     */
+    fun stopForegroundService() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+        } else {
+            stopForeground(true)
+        }
+        stopSelf()
+    }
 
 
+    /**
+     * Переключает режим трекинга.
+     */
+    private fun toggleFileObserver() {
+        trackingEnabled = !trackingEnabled
+        if (trackingEnabled) {
+            fileObserver?.startWatching()
+        } else {
+            fileObserver?.stopWatching()
+            stopForegroundService() // Обязательно вызываем остановку фореграунд-сервисов
+        }
+    }
 
 fun isTrackingEnabled() = trackingEnabled
 }
@@ -890,75 +888,68 @@ class MainActivity : FlutterActivity() {
 
     private val REQUEST_PERMISSION_CODE = 100
     
-    override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
-        super.configureFlutterEngine(flutterEngine)
+override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
+    super.configureFlutterEngine(flutterEngine)
 
-        // Устанавливаем обработчик каналов Flutter
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileWatcherService.CHANNEL)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-"toggleTracking" -> {
-    val serviceIntent = Intent(this, FileWatcherService::class.java)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        startForegroundService(serviceIntent)
-    } else {
-        startService(serviceIntent)
-    }
-    
-    Handler(Looper.getMainLooper()).postDelayed({
-        FileWatcherService.getInstance()?.toggleTracking()
-        result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
-    }, 500) // задержка в 500 миллисекунд
-}
-                    "isTrackingEnabled" -> {
-                        result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
+    MethodChannel(flutterEngine.dartExecutor.binaryMessenger, FileWatcherService.CHANNEL)
+        .setMethodCallHandler { call, result ->
+            when (call.method) {
+                "toggleTracking" -> {
+                    val serviceIntent = Intent(this, FileWatcherService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
                     }
 
-"sendFiles" -> {
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        FileWatcherService.getInstance()?.toggleTracking()
+                        result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
+                    }, 500)
+                }
+                "isTrackingEnabled" -> {
+                    result.success(FileWatcherService.getInstance()?.isTrackingEnabled())
+                }
+                "sendFiles" -> {
     CoroutineScope(Dispatchers.IO).launch {
         try {
-            val success = FileWatcherService.getInstance()?.sendFiles(applicationContext, "ftp")
+            // Сначала проверяем, активен ли трекинг
+            val instance = FileWatcherService.getInstance()
+            if (instance == null || !instance.isTrackingEnabled()) {
+                withContext(Dispatchers.Main) {
+                    result.error("TRACKING_DISABLED", "Для тестового запроса отправки файла, включите сервис.", null)
+                }
+                return@launch
+            }
+
+            // Сервис активен, отправляем файлы
+            val success = instance.sendFiles(applicationContext, "ftp")
 
             withContext(Dispatchers.Main) {
                 when {
                     success == null -> {
-                        result.error(
-                            "SERVICE_UNAVAILABLE",
-                            "Сервис недоступен",
-                            null
-                        )
+                        result.error("SERVICE_UNAVAILABLE", "Сервис недоступен", null)
                     }
                     success -> {
                         result.success("Файл успешно отправлен")
                     }
                     else -> {
-                        result.error(
-                            "SEND_ERROR",
-                            "Ошибка при отправке файла",
-                            null
-                        )
+                        result.error("SEND_ERROR", "Ошибка при отправке файла", null)
                     }
                 }
             }
         } catch (e: Exception) {
             withContext(Dispatchers.Main) {
-                result.error(
-                    "SEND_ERROR",
-                    "Ошибка при отправке файла",
-                    e.message
-                )
+                result.error("SEND_ERROR", "Ошибка при отправке файла", e.message)
             }
         }
     }
-}                }
+}
             }
+        }
 
-        // Проверяем разрешения
-        checkPermissions()
-
-
-    }
-
+    checkPermissions()
+}
     private fun checkPermissions() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED ||
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
