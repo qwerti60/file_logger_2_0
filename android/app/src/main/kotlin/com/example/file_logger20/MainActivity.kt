@@ -84,6 +84,11 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import android.media.MediaMetadataRetriever
 import java.nio.file.Paths
+
+
+
+
+
 private var scheduledExecutor: ScheduledExecutorService? = null
 private val startHour = 8 // Начало рабочего дня
 private val endHour = 23 // Конец рабочего дня
@@ -94,6 +99,7 @@ private var loginH=""
 private var hostH=""
 private var httpH=""
 private var httpPrefix=""
+private var separator="1"
 private var portH=21
 
 data class ApiSettings(
@@ -635,6 +641,7 @@ internal suspend fun sendFiles(context: Context, method: String): Boolean {
                 portH = apiSettings.port
                 sendingsPerDay = apiSettings.frequency
                 methodConnecrting = apiSettings.method
+                separator = apiSettings.separators
                 httpPrefix= prefix1
                 ftpClient.logout()
                 ftpClient.disconnect()
@@ -692,7 +699,14 @@ internal suspend fun sendFiles(context: Context, method: String): Boolean {
                         if (!csvFile.exists()) {
                             throw FileNotFoundException("Файл ${csvFile.name} не найден")
                         }
+                        else {
+                                val appDir = File(getExternalFilesDir(null), "logs") // получаем директорию приложения
 
+val csvFile = File(appDir, csvFile.name) // создаем путь к CSV файлу
+
+reformatCsvFile(csvFile, separator.toInt())
+                           // convertJsonToCsv(csvFile.name, separator.toInt())
+                        }
                         println("Начало загрузки файла: ${csvFile.name}")
                         inputStream = FileInputStream(csvFile)
                         val uploaded = ftpClient.storeFile(csvFile.name, inputStream)
@@ -833,6 +847,89 @@ internal suspend fun sendFiles(context: Context, method: String): Boolean {
         }
     }
 }
+
+
+fun reformatCsvFile(file: File, separator: Int) {
+println("Starting CSV file reformatting...")
+println("Input file: ${file.absolutePath}")
+println("Selected separator: $separator")
+
+try {
+// Проверяем корректность separator
+val delimiterChar = when (separator) {
+0 -> ','
+1 -> ';'
+else -> {
+println("Error: Invalid separator value ($separator). Must be 0 (comma) or 1 (semicolon)")
+throw IllegalArgumentException("Separator must be 0 (comma) or 1 (semicolon)")
+}
+}
+println("Using delimiter: '$delimiterChar'")
+
+// Читаем все строки из файла
+println("Reading file contents...")
+val lines = file.readLines()
+println("Read ${lines.size} lines from file")
+
+// Создаем форматтеры для парсинга и форматирования даты/времени
+println("Initializing date/time formatters...")
+val inputFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd,HH:mm:ss")
+val dateOutputFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
+val timeOutputFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+// Преобразуем строки
+println("Processing lines...")
+var processedLines = 0
+var skippedLines = 0
+
+val newLines = lines.map { line ->
+try {
+val parts = line.split(',')
+if (parts.size < 3) {
+println("Warning: Invalid line format: $line")
+skippedLines++
+return@map line
+}
+
+val filePath = parts[0]
+val dateTimeStr = "${parts[1]},${parts[2]}"
+
+// Парсим дату/время
+val dateTime = LocalDateTime.parse(dateTimeStr, inputFormatter)
+
+// Форматируем в новый формат
+val newDate = dateTime.format(dateOutputFormatter)
+val newTime = dateTime.format(timeOutputFormatter)
+
+processedLines++
+"$filePath$delimiterChar$newDate, $newTime"
+} catch (e: Exception) {
+println("Warning: Error processing line: $line")
+println("Error details: ${e.message}")
+skippedLines++
+line
+}
+}
+
+// Записываем обновленные строки обратно в файл
+println("Writing processed data back to file...")
+file.writeText(newLines.joinToString("\n"))
+
+println("File processing completed:")
+println("- Total lines: ${lines.size}")
+println("- Successfully processed: $processedLines")
+println("- Skipped/unchanged: $skippedLines")
+
+} catch (e: Exception) {
+println("Critical error processing file:")
+println("Error type: ${e.javaClass.simpleName}")
+println("Error message: ${e.message}")
+e.printStackTrace()
+}
+
+println("Operation finished")
+}
+
     /**
      * Чистка и освобождение ресурсов при завершении работы сервиса.
      */
