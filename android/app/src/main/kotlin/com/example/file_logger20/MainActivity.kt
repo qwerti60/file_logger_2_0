@@ -239,27 +239,6 @@ private val fileEventCounter = mutableMapOf<String, Int>()
  
 runBlocking {
     try {
-        // Сначала пытаемся прочитать prefix из локального файла
-        try {
-            val context = applicationContext
-val appDir = context.getFilesDir()?.parentFile?.absolutePath ?: run {
-    Log.e("FileError", "Файловые пути не найдены.")
-    return@run
-}
-val filePath = "$appDir/app_flutter/prefix.txt"
-val file = File(filePath)
-Log.d("FileCheck", "Path: ${file.absolutePath}")
-Log.d("FileCheck", "Exists: ${file.exists()}")
-
-if (file.exists()) {
-    prefix1 = file.readText().trim()
-} else {
-    prefix1 = "_default"
-}
-        } catch (e: Exception) {
-            println("Error reading prefix from file: ${e.message}")
-            prefix1 = "_default"
-        }
 
         // Получаем остальные настройки из API
         val client = OkHttpClient()
@@ -437,6 +416,28 @@ private fun handleDocumentOrImageFile(file: File) {
     }
 }
 fun addCsvRecord(fullPath: File) {
+            // Сначала пытаемся прочитать prefix из локального файла
+        try {
+            val context = applicationContext
+val appDir = context.getFilesDir()?.parentFile?.absolutePath ?: run {
+    Log.e("FileError", "Файловые пути не найдены.")
+    return@run
+}
+val filePath = "$appDir/app_flutter/prefix.txt"
+val file = File(filePath)
+Log.d("FileCheck", "Path: ${file.absolutePath}")
+Log.d("FileCheck", "Exists: ${file.exists()}")
+
+if (file.exists()) {
+    prefix1 = file.readText().trim()
+} else {
+    prefix1 = "_default"
+}
+        } catch (e: Exception) {
+            println("Error reading prefix from file: ${e.message}")
+            prefix1 = "_default"
+        }
+
     val now = LocalDateTime.now()
     val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
     val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
