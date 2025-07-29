@@ -13,6 +13,7 @@ import android.content.pm.PackageManager
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.time.temporal.ChronoUnit
  
  import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -65,6 +66,7 @@ import java.net.URL
 import java.net.HttpURLConnection
 import android.util.Base64
 import android.app.Service
+import kotlin.math.abs
 
 import android.util.Log
 import android.content.Intent
@@ -85,7 +87,10 @@ import java.util.concurrent.atomic.AtomicInteger
 import android.media.MediaMetadataRetriever
 import java.nio.file.Paths
 
-
+import java.time.*
+import java.nio.file.Files
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.locks.ReentrantLock
 
 
 
@@ -296,7 +301,7 @@ override fun onEvent(event: Int, path: String?) {
     if (path != null) {
         val fullPath = File(pathToWatch, path)
         
-        if (event == FileObserver.OPEN && fullPath.exists() && !fullPath.isDirectory && fullPath.extension.isNotBlank()) {
+        if ((event != FileObserver.OPEN||event != FileObserver.ACCESS) && fullPath.extension.isNotBlank()) {
             
             // Проверка читаемости файла и размера
             if (!fullPath.canRead() || fullPath.length() == 0L) {
@@ -415,99 +420,127 @@ private fun handleDocumentOrImageFile(file: File) {
         addCsvRecord(file)
     }
 }
-fun addCsvRecord(fullPath: File) {
-            // Сначала пытаемся прочитать prefix из локального файла
-        try {
-            val context = applicationContext
-val appDir = context.getFilesDir()?.parentFile?.absolutePath ?: run {
-    Log.e("FileError", "Файловые пути не найдены.")
-    return@run
-}
-val filePath = "$appDir/app_flutter/prefix.txt"
-val file = File(filePath)
-Log.d("FileCheck", "Path: ${file.absolutePath}")
-Log.d("FileCheck", "Exists: ${file.exists()}")
+// Лок для предотвращения одновременного доступа к операции записи
+private val lock = ReentrantLock()
 
-if (file.exists()) {
-    prefix1 = file.readText().trim()
-} else {
-    prefix1 = "_default"
-}
-        } catch (e: Exception) {
-            println("Error reading prefix from file: ${e.message}")
-            prefix1 = "_default"
+fun Context.addCsvRecord(fullPath: File) {
+    synchronized(lock) {
+        fun readPrefix(): String {
+            val context = this
+            val appDir = context.filesDir?.parentFile?.absolutePath ?: run {
+                Log.e("FileError", "Файловые пути не найдены.")
+                return ""
+            }
+            val filePath = "$appDir/app_flutter/prefix.txt"
+            val file = File(filePath)
+            
+            return if (file.exists()) {
+                file.readText().trim()
+            } else {
+                "_default"
+            }
         }
-
-    val now = LocalDateTime.now()
-    val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
-    val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
-    val timeFormatterf = DateTimeFormatter.ofPattern("HHmm")
-    val dateFormatterf = DateTimeFormatter.ofPattern("ddMMyy")
-
-    // Директория для логов
-    val appDir = File(getExternalFilesDir(null), "logs")
-    if (!appDir.exists()) {
-        if (!appDir.mkdirs()) {
-            throw IOException("Failed to create directory: ${appDir.path}")
-        }
-    }
-
-    // Создание пути к новому файлу
-    val csvFile = appDir.listFiles { file -> file.name.endsWith(".csv") }?.firstOrNull()
-    ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv").also { newFile ->
-        // Создаем новый файл и добавляем пустую строку
-        newFile.writeText("\n")
-    }
-
-    try {
-        // Формируем новую запись
-        val newEntry = when(separators.toInt()) {
-            1 -> "${fullPath.absolutePath},${now.format(dateFormatter)},${now.format(timeFormatter)}"
-            else -> "${fullPath.absolutePath},${now.format(dateFormatter)},${now.format(timeFormatter)}"
-        }
-
-        // Читаем существующие записи
-        val existingLines = if (csvFile.exists() && csvFile.length() > 0L) {
-            csvFile.readLines().toMutableList()
-        } else {
-            mutableListOf()
-        }
-
-        val newDateTime = "${now.format(dateFormatter)},${now.format(timeFormatter)}"
         
-        // Удаляем все строки с таким же временем
-        existingLines.removeAll { line ->
-            val fields = line.split(',')
-            when(separators.toInt()) {
-                1 -> fields.size >= 3 && 
-                     "${fields.getOrNull(1)},${fields.getOrNull(2)}" == newDateTime
-                else -> fields.size >= 4 && 
-                        "${fields.getOrNull(2)},${fields.getOrNull(3)}" == newDateTime
+        val prefix1 = readPrefix()
+    
+        val now = LocalDateTime.now()
+        val dateFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd")
+        val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+        val timeFormatterf = DateTimeFormatter.ofPattern("HHmm")
+        val dateFormatterf = DateTimeFormatter.ofPattern("ddMMyy")
+    
+        // Директория для логов
+        val appDir = File(getExternalFilesDir(null), "logs")
+        if (!appDir.exists()) {
+            if (!appDir.mkdirs()) {
+                throw IOException("Failed to create directory: ${appDir.path}")
             }
         }
-
-        // Добавляем новую запись
-        existingLines.add(newEntry)
-
-        // Записываем обновленный список в файл
-        csvFile.parentFile?.mkdirs()
-        csvFile.bufferedWriter().use { writer ->
-            existingLines.forEachIndexed { index, line ->
-                if (index > 0) writer.newLine()
-                writer.write(line)
+    
+        // Получаем путь к существующему CSV-файлу или создаем новый
+        val csvFile = appDir.listFiles { file -> file.name.endsWith(".csv") }?.firstOrNull()
+            ?: File(appDir, "${prefix1}_${now.format(dateFormatterf)}_${now.format(timeFormatterf)}.csv").apply {
+                writeText("\n")
             }
+    
+        try {
+            println("Debug: Starting CSV operation")
+            println("Debug: CSV file exists: ${csvFile.exists()}")
+            println("Debug: CSV file length: ${csvFile.length()}")
+    
+            // Формат даты и времени
+            val dateFormat = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+    
+            // Новая запись
+            val separators = 1 // Предположительно используем дефолтный вариант разделения полей
+            val newEntry = "${fullPath.absolutePath},${now.format(dateFormatter)},${now.format(timeFormatter)}"
+            println("Debug: New entry formed: $newEntry")
+    
+            // Преобразование временной метки новой записи
+            val newDateTimeParsed = LocalDateTime.parse("${now.format(dateFormatter)} ${now.format(timeFormatter)}", dateFormat)
+            println("Debug: New DateTime parsed as: $newDateTimeParsed")
+    
+            // Чтение существующих строк из файла
+            val existingLines = if (csvFile.exists() && csvFile.length() > 0L) {
+                csvFile.readLines().also {
+                    println("Debug: Read ${it.size} existing lines")
+                }
+            } else {
+                mutableListOf()
+            }.toMutableList()
+    
+            // Удаляем повторяющиеся строки
+            val updatedLines = existingLines.filterNot { line ->
+                try {
+                    val fields = line.split(",").map { it.trim() }
+                    if (fields.size == 3) {
+                        val existingDateTimeStr = "${fields[1]} ${fields[2]}"
+                        val existingDateTimeParsed = LocalDateTime.parse(existingDateTimeStr, dateFormat)
+                        
+                        // Проверка временного интервала между новыми и старыми записями
+                        val timeDiffInMillis = abs(ChronoUnit.MILLIS.between(existingDateTimeParsed, newDateTimeParsed))
+                        
+                        // Если интервал меньше 2 секунд — считаем запись дублем
+                        val isDuplicate = (existingDateTimeParsed == newDateTimeParsed) || (timeDiffInMillis < 2000)
+                        println("Debug: Line: $line, Time difference: $timeDiffInMillis ms, Is duplicate: $isDuplicate")
+                        isDuplicate
+                    } else {
+                        false
+                    }
+                } catch (e: Exception) {
+                    println("Debug: Error processing line '$line': ${e.message}")
+                    false
+                }
+            }.toMutableList()
+    
+            // Добавляем новую запись, если нет конфликта
+            if (updatedLines.size == existingLines.size) {
+                updatedLines.add(newEntry)
+            }
+    
+            // Перезапись обновленных данных в файл
+            try {
+                Files.write(
+                    Paths.get(csvFile.absolutePath),
+                    updatedLines,
+                    StandardCharsets.UTF_8
+                )
+                println("Debug: Written ${updatedLines.size} lines to file")
+            } catch (e: Exception) {
+                println("Debug: Error writing to file: ${e.message}")
+                throw e
+            }
+    
+            println("Success: Added record to CSV: $newEntry")
+            println("File path: ${csvFile.absolutePath}")
+            println("Number of records: ${updatedLines.size}")
+        } catch (e: Exception) {
+            e.printStackTrace()
+            println("Error adding record to CSV: ${e.message}")
         }
-
-        println("Added record to CSV: $newEntry")
-        println("File path: ${csvFile.absolutePath}")
-        println("Number of records: ${existingLines.size}")
-    } catch (e: Exception) {
-        e.printStackTrace()
-        println("Error adding record to CSV: ${e.message}")
     }
 }
-     }
-
+}
             fileObserver.startWatching()
             fileObservers.add(fileObserver)
             watchedDirectories.add(pathToWatch)
