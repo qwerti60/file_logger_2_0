@@ -19,7 +19,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.file_logger20"
+        applicationId = "com.example.file_logger_2_00"
         minSdk = flutter.minSdkVersion
         targetSdk = 33//flutter.targetSdkVersion
         versionCode = flutter.versionCode

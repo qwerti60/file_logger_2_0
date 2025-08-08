@@ -86,12 +86,16 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import android.media.MediaMetadataRetriever
 import java.nio.file.Paths
+import java.util.*
 
 import java.time.*
 import java.nio.file.Files
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.locks.ReentrantLock
 
+import java.text.SimpleDateFormat
+import java.util.Locale      // and Date if you also use it
+// import java.util.Date
 
 
 private var scheduledExecutor: ScheduledExecutorService? = null
@@ -554,6 +558,7 @@ fun Context.addCsvRecord(fullPath: File) {
     }
 }
 
+private val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
 private suspend fun scheduleFileSending(context: Context) {
 withContext(Dispatchers.IO) {
 try {
@@ -591,46 +596,54 @@ println("Error getting prefix: ${e.message}")
         scheduledExecutor?.shutdown()
     }
 
-    scheduledExecutor = Executors.newSingleThreadScheduledExecutor()
+    require(startHour in 0..23 && endHour in 1..24 && startHour < endHour)
+    require(sendingsPerDay > 0)
 
-    // Рассчитываем интервалы отправки
+    val workMinutes   = (endHour - startHour) * 60
+    val intervalMin   = workMinutes / sendingsPerDay   // равный интервал
+    val sendTimes     = mutableListOf<LocalTime>()
 
-
-val workingHours = endHour - startHour
-println("Количество отправок в день: $sendingsPerDay")
-
-// Безопасное деление с проверкой на ноль
-val intervalHours = workingHours.toDouble() / (if (sendingsPerDay <= 0) 1 else sendingsPerDay).toDouble()
-
-
-    // Получаем текущее время
-    val now = Calendar.getInstance()
-
-    // Планируем отправки на сегодня
-    for (i in 0 until sendingsPerDay) {
-        val sendingTime = Calendar.getInstance()
-    // Округляем сумму часов до целого числа
-    sendingTime.set(
-        Calendar.HOUR_OF_DAY,
-        (startHour + (i * intervalHours)).toInt() // Преобразуем double в Int
-    )
-        sendingTime.set(Calendar.MINUTE, 0)
-        sendingTime.set(Calendar.SECOND, 0)
-
-        // Если время отправки уже прошло сегодня, планируем на завтра
-        if (sendingTime.before(now)) {
-            sendingTime.add(Calendar.DAY_OF_MONTH, 1)
-        }
-
-        val delay = sendingTime.timeInMillis - now.timeInMillis
-
-        scheduledExecutor?.schedule({
-             CoroutineScope(Dispatchers.IO).launch {
-            sendFiles(context, methodConnecrting)   
-                 }    // Передаем контекст
-            scheduleNextDaySending(context, sendingTime, methodConnecrting) // И сюда передаем контекст
-        }, delay, TimeUnit.MILLISECONDS)
+    // 1. Считаем «чистое» время-дня для каждой отправки
+    repeat(sendingsPerDay) { index ->
+        val total = index * intervalMin
+        val hour  = startHour + total / 60
+        val min   = total % 60
+        sendTimes += LocalTime.of(hour, min)
     }
+
+    println("Время ежедневных отправок: $sendTimes")
+
+    // 2. Планируем каждую отправку отдельно
+    sendTimes.forEachIndexed { i, time ->
+        val firstDelay = delayUntil(time)
+        println(
+            "Отправка №${i + 1} первое срабатывание через ${firstDelay / 1000} сек. " +
+            "($time сегодняшнего/завтрашнего дня)"
+        )
+
+        scheduler.scheduleAtFixedRate(
+            {
+                CoroutineScope(Dispatchers.IO).launch {
+                    sendFiles(context, methodConnecrting)
+                }
+            },
+            firstDelay,                           // initialDelay
+            TimeUnit.DAYS.toMillis(1),            // период 24 ч
+            TimeUnit.MILLISECONDS
+        )
+    }
+}
+private val scheduler = Executors.newScheduledThreadPool(1)
+/* Сколько миллисекунд осталось до ближайшего наступления `time` сегодня/завтра. */
+private fun delayUntil(time: LocalTime): Long {
+    val now     = LocalDateTime.now()
+    var nextRun = now.withHour(time.hour)
+                     .withMinute(time.minute)
+                     .withSecond(0)
+                     .withNano(0)
+
+    if (nextRun.isBefore(now)) nextRun = nextRun.plusDays(1)   // уже прошло – переносим на завтра
+    return Duration.between(now, nextRun).toMillis()
 }
 
 private fun scheduleNextDaySending(context: Context, previousTime: Calendar, methodConnecrting: String) {
