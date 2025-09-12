@@ -247,37 +247,33 @@ private val fileEventCounter = mutableMapOf<String, Int>()
 
  
 runBlocking {
-    try {
+        try {
+            val appDir   = context.filesDir.parentFile.absolutePath
+        val filePath = "$appDir/app_flutter/settings.txt"
+        val file     = File(filePath)
 
-        // Получаем остальные настройки из API
-        val client = OkHttpClient()
-        val request = Request.Builder()
-            .url("https://ivnovav.ru/logger_api/getSettings.php")
-            .build()
+        if (!file.exists()) {
+            println("Ошибка: Файл настроек '$filePath' не найден!")
+            return@runBlocking
+        }
 
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw IOException("Unexpected code $response")
+        val jsonStr      = file.readText()
+        val apiSettings  = Gson().fromJson(jsonStr, ApiSettings::class.java)
 
-            val responseBody = response.body?.string() ?: throw IOException("Response body is null")
-            val gson = Gson()
-            val apiSettings = gson.fromJson(responseBody, ApiSettings::class.java)
+        FTPClient().apply {
+            connect(apiSettings.host, apiSettings.port)
+            login(apiSettings.login, apiSettings.password)
+            enterLocalPassiveMode()
+            setFileType(FTP.BINARY_FILE_TYPE)
 
-            val ftpClient = FTPClient()
-            ftpClient.connect(apiSettings.host, apiSettings.port)
-            ftpClient.login(apiSettings.login, apiSettings.password)
-            ftpClient.enterLocalPassiveMode()
-            ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
+            separators = apiSettings.separators   // ← используем separators
 
-            // Используем только separators из API
-            separators = apiSettings.separators
-            
-            ftpClient.logout()
-            ftpClient.disconnect()
+            logout()
+            disconnect()
         }
     } catch (e: Exception) {
         println("Error getting settings: ${e.message}")
-        // В случае ошибки при получении separators можно установить значение по умолчанию
-       // separators = listOf("_default_separator")
+        // separators = listOf("_default_separator")
     }
 }
 
@@ -435,11 +431,19 @@ fun Context.addCsvRecord(fullPath: File) {
                 Log.e("FileError", "Файловые пути не найдены.")
                 return ""
             }
-            val filePath = "$appDir/app_flutter/prefix.txt"
+            val filePath = "$appDir/app_flutter/settings.txt"
             val file = File(filePath)
             
             return if (file.exists()) {
-                file.readText().trim()
+                            // 3. Чтение содержимого
+            val jsonStr = file.readText()
+            if (jsonStr.isBlank()) return "_default"
+
+            // 4. Парсинг JSON
+            val gson = Gson()
+            val apiSettings = gson.fromJson(jsonStr, ApiSettings::class.java)
+
+                apiSettings.prefix
             } else {
                 "_default"
             }
@@ -560,39 +564,42 @@ fun Context.addCsvRecord(fullPath: File) {
 
 private val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
 private suspend fun scheduleFileSending(context: Context) {
-withContext(Dispatchers.IO) {
-try {
-val client = OkHttpClient()
-val request = Request.Builder()
-.url("https://ivnovav.ru/logger_api/getSettings.php")
-.build()
 
-client.newCall(request).execute().use { response ->
-if (!response.isSuccessful) throw IOException("Unexpected code $response")
+    withContext(Dispatchers.IO) {
+        try {
+            val appDir   = context.filesDir.parentFile.absolutePath
+            val filePath = "$appDir/app_flutter/settings.txt"
+            val file     = File(filePath)
 
-val responseBody = response.body?.string() ?: throw IOException("Response body is null")
-val gson = Gson()
-val apiSettings = gson.fromJson(responseBody, ApiSettings::class.java)
+            if (!file.exists()) {
+                println("Ошибка: Файл настроек '$filePath' не найден!")
+                return@withContext                // метка-выход
+            }
 
-val ftpClient = FTPClient()
-ftpClient.connect(apiSettings.host, apiSettings.port)
-ftpClient.login(apiSettings.login, apiSettings.password)
-ftpClient.enterLocalPassiveMode()
-ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
+            val jsonStr     = file.readText()
+            val apiSettings = Gson().fromJson(jsonStr, ApiSettings::class.java)
 
-sendingsPerDay = apiSettings.frequency
-methodConnecrting = apiSettings.method
-println("testd")
-println(apiSettings.frequency)
-ftpClient.logout()
-ftpClient.disconnect()
-}
-} catch (e: Exception) {
-println("Error getting prefix: ${e.message}")
-}
-}
+            val ftpClient = FTPClient().apply {
+                connect(apiSettings.host, apiSettings.port)
+                login(apiSettings.login, apiSettings.password)
+                enterLocalPassiveMode()
+                setFileType(FTP.BINARY_FILE_TYPE)
+            }
 
-    if (scheduledExecutor != null) {
+            sendingsPerDay   = apiSettings.frequency
+            methodConnecrting = apiSettings.method
+            println("testd")
+            println(apiSettings.frequency)
+
+            ftpClient.logout()
+            ftpClient.disconnect()
+
+        } catch (e: Exception) {
+            println("Error getting prefix: ${e.message}")
+        }
+    }
+
+if (scheduledExecutor != null) {
         scheduledExecutor?.shutdown()
     }
 
@@ -633,7 +640,7 @@ println("Error getting prefix: ${e.message}")
         )
     }
 }
-private val scheduler = Executors.newScheduledThreadPool(1)
+private val scheduler = Executors.newScheduledThreadPool(4)
 /* Сколько миллисекунд осталось до ближайшего наступления `time` сегодня/завтра. */
 private fun delayUntil(time: LocalTime): Long {
     val now     = LocalDateTime.now()
@@ -663,41 +670,47 @@ private fun scheduleNextDaySending(context: Context, previousTime: Calendar, met
 }
 internal suspend fun sendFiles(context: Context, method: String): Boolean {
     return runBlocking {
-        try {
-            val client = OkHttpClient()
-            val request = Request.Builder()
-                .url("https://ivnovav.ru/logger_api/getSettings.php")
-                .build()
-
-            client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) throw IOException("Unexpected code $response")
-
-                val responseBody = response.body?.string() ?: throw IOException("Response body is null")
-                val gson = Gson()
-                val apiSettings = gson.fromJson(responseBody, ApiSettings::class.java)
-
-                val ftpClient = FTPClient()
-                ftpClient.connect(apiSettings.host, apiSettings.port)
-                ftpClient.login(apiSettings.login, apiSettings.password)
-                ftpClient.enterLocalPassiveMode()
-                ftpClient.setFileType(FTP.BINARY_FILE_TYPE)
-                passwordH = apiSettings.password
-                loginH = apiSettings.login
-                hostH = apiSettings.host
-                httpH = apiSettings.httpurl
-                portH = apiSettings.port
-                sendingsPerDay = apiSettings.frequency
-                methodConnecrting = apiSettings.method
-                separator = apiSettings.separators
-                httpPrefix= prefix1
-                ftpClient.logout()
-                ftpClient.disconnect()
+         try {
+            // 1. Файл с настройками находится во внутреннем каталоге приложения
+             val appDir = context.filesDir?.parentFile?.absolutePath ?: run {
+                Log.e("FileError", "Файловые пути не найдены.")
+                return@runBlocking false
             }
+                                   val filePath = "$appDir/app_flutter/settings.txt"
+            val file = File(filePath)
+            //val file = File(context.filesDir, "settings.txt")
+
+            // 2. Если файла нет – выходим, как и во Flutter-коде
+            if (!file.exists()) {
+                Log.d("Settings", "settings.txt ещё не создан – пропускаем загрузку")
+                return@runBlocking false
+            }
+
+            // 3. Чтение содержимого
+            val jsonStr = file.readText()
+            if (jsonStr.isBlank()) return@runBlocking false
+
+            // 4. Парсинг JSON
+            val gson = Gson()
+            val apiSettings = gson.fromJson(jsonStr, ApiSettings::class.java)
+
+            // 5. Записываем значения в ваши глобальные/инстанс-переменные
+            passwordH         = apiSettings.password
+            loginH            = apiSettings.login
+            hostH             = apiSettings.host
+            httpH             = apiSettings.httpurl
+            portH             = apiSettings.port
+            sendingsPerDay    = apiSettings.frequency
+            methodConnecrting = apiSettings.method
+            separator         = apiSettings.separators
+            httpPrefix        = apiSettings.prefix   // или другое имя поля в ApiSettings
+
+            Log.d("Settings", "Настройки загружены")
+            true
         } catch (e: Exception) {
-            println("Error getting prefix: ${e.message}")
-            return@runBlocking false
+            Log.e("Settings", "Ошибка при чтении настроек: ${e.message}", e)
+            false
         }
-    
         if (scheduledExecutor != null) {
             scheduledExecutor?.shutdown()
         }
@@ -707,7 +720,8 @@ internal suspend fun sendFiles(context: Context, method: String): Boolean {
             val csvFile = logsDir.walkTopDown().filter { it.extension == "csv" }.firstOrNull()
             
             if (csvFile == null) {
-                println("CSV файл не найден")
+                    val sdf = SimpleDateFormat("HH:mm:ss dd.MM.yyyy", Locale.getDefault())
+    println("CSV файл не найден — текущее время: ${sdf.format(Date())}")
                 return@runBlocking false
             }
         
@@ -759,7 +773,9 @@ reformatCsvFile(csvFile, separator.toInt())
                         val uploaded = ftpClient.storeFile(csvFile.name, inputStream)
 
                         if (uploaded) {
-                            println("Файл успешно отправлен по FTP")
+                                val sdf1 = SimpleDateFormat("HH:mm:ss dd.MM.yyyy", Locale.getDefault())
+    println("Файл успешно отправлен по FTP — текущее время: ${sdf1.format(Date())}")
+                            
                             if (csvFile.delete()) {
                                 println("Локальный файл успешно удален")
                             } else {

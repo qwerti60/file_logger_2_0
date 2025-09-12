@@ -175,9 +175,67 @@ class _SettingPageState extends State<SettingPage> {
   @override
   void initState() {
     super.initState();
-    getSettings();
+    loadSettings();
   }
+Future saveSettings() async {
+try {
+final file = await _getSettingsFile();
 
+final settings = {
+'prefix' : _prefixController.text.trim(),
+'login' : _loginController.text.trim(),
+'password' : _passwordController1.text,
+'httpurl' : _httpurlController.text.trim(),
+'host' : _hostController.text.trim(),
+'port' : _portController.text.trim(),
+'frequency' : _sendingFrequencyController.text.trim(),
+'method' : _chosenValue, // например GET/POST
+'separators' : _switchValue ? 1 : 0 // 1 – true, 0 – false
+};
+
+await file.writeAsString(jsonEncode(settings));
+debugPrint('Настройки сохранены: ${file.path}');
+      showDialog(
+        context: context,
+        builder:
+            (ctx) => AlertDialog(
+              title: Text('Успех'),
+              content: Text('Настройки сохранены'),
+              actions: [
+                TextButton(
+                  child: Text('ОК'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                  },
+                ),
+              ],
+            ),
+      );
+} catch (e, s) {
+      showDialog(
+        context: context,
+        builder:
+            (ctx) => AlertDialog(
+              title: Text('Ошибка'),
+              content: Text(e.toString()),
+              actions: [
+                TextButton(
+                  child: Text('ОК'),
+                  onPressed: () {
+                    Navigator.of(ctx).pop();
+                  },
+                ),
+              ],
+            ),
+      );
+debugPrint('Ошибка при сохранении настроек: $e\n$s');
+}
+}
+
+Future _getSettingsFile() async {
+final dir = await getApplicationDocumentsDirectory();
+return File('${dir.path}/settings.txt');
+}
   Future<void> _sendData() async {
     // Сначала сохраняем prefix локально
     try {
@@ -252,6 +310,37 @@ class _SettingPageState extends State<SettingPage> {
     }
   }
 
+Future loadSettings() async {
+try {
+final file = await _getSettingsFile();
+
+if (!await file.exists()) {
+debugPrint('settings.txt ещё не создан – пропускаем загрузку');
+return;
+}
+
+final jsonStr = await file.readAsString();
+if (jsonStr.isEmpty) return;
+
+final map = jsonDecode(jsonStr);
+
+setState(() {
+_prefixController.text = map['prefix'] ?? '';
+_loginController.text = map['login'] ?? '';
+_passwordController1.text = map['password'] ?? '';
+_httpurlController.text = map['httpurl'] ?? '';
+_hostController.text = map['host'] ?? '';
+_portController.text = map['port'] ?? '';
+_sendingFrequencyController.text = map['frequency'] ?? '';
+_chosenValue = map['method'] ?? 'GET';
+_switchValue = (map['separators'] ?? 0) == 1;
+});
+
+debugPrint('Настройки загружены');
+} catch (e, s) {
+debugPrint('Ошибка при чтении настроек: $e\n$s');
+}
+}
   // Добавьте метод для чтения prefix при запуске приложения
   Future<String> loadPrefix() async {
     try {
@@ -802,7 +891,7 @@ class _SettingPageState extends State<SettingPage> {
                       side: BorderSide(color: Colors.grey, width: 1),
                     ),
                   ),
-                  onPressed: _sendData,
+                  onPressed: saveSettings,
                   child: const Text('Сохранить изменения'),
                 ),
               ),
